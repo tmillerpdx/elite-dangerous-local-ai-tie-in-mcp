@@ -567,7 +567,7 @@ class MCPTools:
             game_state = self.data_store.get_game_state()
             
             # Get recent location events for additional context
-            location_events = self.data_store.get_events_by_type("Location", limit=1)
+            location_events = self.data_store.get_events_by_type("Location")
             recent_jumps = self.data_store.get_events_by_type("FSDJump", limit=5)
             
             response = {
@@ -590,16 +590,31 @@ class MCPTools:
                 }
                 response["recent_systems"].append(system_info)
             
-            # Add additional location context if available
-            if location_events:
-                latest = location_events[-1]
-                response["location_timestamp"] = latest.timestamp.isoformat()
-                response["population"] = latest.raw_event.get("Population", 0)
-                response["allegiance"] = latest.raw_event.get("Allegiance")
-                response["economy"] = latest.raw_event.get("Economy")
-                response["government"] = latest.raw_event.get("Government")
-                response["security"] = latest.raw_event.get("Security")
-            
+            # location_timestamp is when the journal last placed the commander:
+            # the newest of any event that does so, not only Location. Clients
+            # use it to judge whether the server is stale.
+            placing_events = list(location_events)
+            for event_type in ("FSDJump", "CarrierJump", "Docked"):
+                placing_events.extend(self.data_store.get_events_by_type(event_type))
+            newest_placing = latest_by_timestamp(placing_events)
+            if newest_placing is not None:
+                response["location_timestamp"] = newest_placing.timestamp.isoformat()
+                response["location_event"] = newest_placing.event_type
+
+            # System details come from the newest event that describes a system.
+            system_events = [e for e in placing_events if e.event_type != "Docked"]
+            latest = latest_by_timestamp(system_events)
+            if latest is not None:
+                raw = latest.raw_event or {}
+                response["population"] = raw.get("Population", 0)
+                response["allegiance"] = raw.get("SystemAllegiance") or raw.get("Allegiance")
+                response["economy"] = (raw.get("SystemEconomy_Localised")
+                                       or raw.get("SystemEconomy") or raw.get("Economy"))
+                response["government"] = (raw.get("SystemGovernment_Localised")
+                                          or raw.get("SystemGovernment") or raw.get("Government"))
+                response["security"] = (raw.get("SystemSecurity_Localised")
+                                        or raw.get("SystemSecurity") or raw.get("Security"))
+
             return response
             
         except Exception as e:
@@ -1276,14 +1291,18 @@ class MCPTools:
             "missions_failed": 0,
             "missions_abandoned": 0,
             "total_rewards": 0,
+            "total_donated": 0,
             "factions_worked_for": set(),
             "active_missions": [],
             "completed_missions": []
         }
         
         active_missions = {}
-        
-        for event in events:
+
+        # Walk oldest first. The query returns newest first, and in that order
+        # a completion is seen before its acceptance, which left every
+        # finished mission listed as still active.
+        for event in sorted(events, key=lambda e: e.timestamp):
             if event.event_type == "MissionAccepted":
                 summary["missions_accepted"] += 1
                 mission_id = event.raw_event.get("MissionID")
@@ -1303,8 +1322,14 @@ class MCPTools:
                     
             elif event.event_type == "MissionCompleted":
                 summary["missions_completed"] += 1
-                summary["total_rewards"] += event.key_data.get("reward", 0)
-                
+                # Donation missions carry no Reward, and key_data may hold an
+                # explicit None; either must count as zero, not crash the sum.
+                reward = event.key_data.get("reward")
+                if reward is None:
+                    reward = event.raw_event.get("Reward")
+                summary["total_rewards"] += int(reward or 0)
+                summary["total_donated"] += int(event.raw_event.get("Donated") or 0)
+
                 mission_id = event.raw_event.get("MissionID")
                 if mission_id and mission_id in active_missions:
                     mission_info = active_missions.pop(mission_id)

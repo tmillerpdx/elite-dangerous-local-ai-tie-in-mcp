@@ -59,7 +59,8 @@ def latest_by_timestamp(events: Iterable[Any]) -> Optional[Any]:
     """
     newest = None
     for event in events:
-        if newest is None or event.timestamp > newest.timestamp:
+        # ">=" so that of two events in the same second, the later-stored wins.
+        if newest is None or event.timestamp >= newest.timestamp:
             newest = event
     return newest
 

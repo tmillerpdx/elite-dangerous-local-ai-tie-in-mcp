@@ -72,6 +72,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get_material_inventory` now applies pickups, trades, engineering, synthesis,
   broker purchases and mission rewards made after the login snapshot.
 - `get_ship_status` module list was always empty.
+- Live journal tailing never worked on Windows. The game keeps its journal
+  open and only flushes, which produces no file-change notifications until the
+  file is closed, so a session started after the server was invisible. The
+  monitor now polls the newest journals every second and before every tool
+  call, and reads only complete lines.
+- Background monitoring was started on a setup event loop that never ran
+  again once the MCP framework took over, so the poll task and everything the
+  file-watcher scheduled were stranded. The monitor now moves itself onto the
+  live loop at the first tool call.
+- A new journal file could be delivered twice when both the watcher and a
+  poll saw it.
+- `get_mission_summary` crashed on missions with no reward, such as donations,
+  and listed completed missions as still active. It now also reports
+  `total_donated`.
+- `location_timestamp` now reflects the newest jump, carrier jump or docking,
+  not only the last login, and `location_event` names it. System allegiance,
+  economy, government and security were always empty.
 
 ### Changed
 - N/A
