@@ -13,9 +13,19 @@ from enum import Enum
 try:
     from ..journal.events import EventCategory, ProcessedEvent
     from ..utils.data_store import EventFilter, QuerySortOrder, GameState
+    from ..utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
+    from ..utils.trade_dangerous import TradeDangerousClient
+    from ..utils.inventory import (
+        MATERIAL_CHANGE_EVENTS, compute_material_inventory, latest_by_timestamp, summarize_loadout
+    )
 except ImportError:
     from src.journal.events import EventCategory, ProcessedEvent
     from src.utils.data_store import EventFilter, QuerySortOrder, GameState
+    from src.utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
+    from src.utils.trade_dangerous import TradeDangerousClient
+    from src.utils.inventory import (
+        MATERIAL_CHANGE_EVENTS, compute_material_inventory, latest_by_timestamp, summarize_loadout
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -44,18 +54,432 @@ class MCPTools:
     - Performance metrics and statistics
     """
     
-    def __init__(self, data_store):
+    def __init__(self, data_store, spansh_client=None, trade_client=None):
         """
         Initialize MCP tools with data store reference.
-        
+
         Args:
             data_store: Reference to the global data store
+            spansh_client: Optional SpanshClient, injectable for tests
+            trade_client: Optional TradeDangerousClient, injectable for tests
         """
         self.data_store = data_store
+        self.spansh_client = spansh_client or SpanshClient()
+        self.trade_client = trade_client or TradeDangerousClient()
         logger.info("MCP Tools initialized")
-    
+
+    # ==================== Nearby Search Tools (Spansh) ====================
+
+    def _resolve_reference_system(self, reference_system: str) -> Dict[str, Any]:
+        """
+        Pick the system to search around.
+
+        An empty string selects the commander's current system from the journal.
+        Returns {"system", "source"} or a structured error object.
+        """
+        explicit = (reference_system or "").strip()
+        if explicit:
+            return {"system": explicit, "source": "argument"}
+        current = self.data_store.get_game_state().current_system
+        if not current or current == "Unknown":
+            return {
+                "error": "Current system is not known from the journal yet. "
+                         "Pass reference_system explicitly."
+            }
+        return {"system": current, "source": "current_location"}
+
+    async def find_mining_hotspots(
+        self,
+        commodity: str = "Platinum",
+        reference_system: str = "",
+        min_hotspots: int = 1,
+        max_distance_ly: float = 100.0,
+        pristine_only: bool = False,
+        limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Find the nearest ring hotspots for a commodity using Spansh.
+
+        Args:
+            commodity: Hotspot commodity; empty string selects Platinum
+            reference_system: System to search around; empty selects current system
+            min_hotspots: Minimum hotspots of the commodity in a single ring
+            max_distance_ly: Search radius in light years
+            pristine_only: Only return rings with pristine reserves
+            limit: Maximum bodies to return
+
+        Returns:
+            Dict with ranked ring candidates, or a structured error object
+        """
+        try:
+            reference = self._resolve_reference_system(reference_system)
+            if "error" in reference:
+                return reference
+            result = await self.spansh_client.find_ring_hotspots(
+                reference["system"],
+                (commodity or "").strip() or "Platinum",
+                min_hotspots,
+                float(max_distance_ly),
+                bool(pristine_only),
+                limit
+            )
+            if "error" not in result:
+                result["reference_source"] = reference["source"]
+            return result
+        except Exception as e:
+            logger.error(f"Error finding mining hotspots: {e}")
+            return {"error": str(e)}
+
+    async def find_exobiology_targets(
+        self,
+        reference_system: str = "",
+        min_bio_signals: int = 2,
+        max_distance_ly: float = 50.0,
+        max_gravity_g: float = 0.0,
+        max_arrival_ls: float = 0.0,
+        limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Find the nearest landable bodies with biological signals using Spansh.
+
+        Args:
+            reference_system: System to search around; empty selects current system
+            min_bio_signals: Minimum biological signal count on the body
+            max_distance_ly: Search radius in light years
+            max_gravity_g: Skip bodies above this gravity; 0 means no limit
+            max_arrival_ls: Skip bodies further than this from arrival; 0 means no limit
+            limit: Maximum bodies to return
+
+        Returns:
+            Dict with ranked body candidates, or a structured error object
+        """
+        try:
+            reference = self._resolve_reference_system(reference_system)
+            if "error" in reference:
+                return reference
+            result = await self.spansh_client.find_exobiology_bodies(
+                reference["system"],
+                min_bio_signals,
+                float(max_distance_ly),
+                float(max_gravity_g),
+                float(max_arrival_ls),
+                limit
+            )
+            if "error" not in result:
+                result["reference_source"] = reference["source"]
+            return result
+        except Exception as e:
+            logger.error(f"Error finding exobiology targets: {e}")
+            return {"error": str(e)}
+
+    async def find_material_bodies(
+        self,
+        materials: str,
+        reference_system: str = "",
+        min_percent: float = 0.0,
+        max_distance_ly: float = 50.0,
+        max_gravity_g: float = 0.0,
+        max_arrival_ls: float = 0.0,
+        sort_by: str = "distance",
+        limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Find landable bodies carrying raw engineering materials using Spansh.
+
+        Args:
+            materials: Comma-separated raw materials; the first is the primary one
+            reference_system: System to search around; empty selects current system
+            min_percent: Minimum surface share of the primary material
+            max_distance_ly: Search radius in light years
+            max_gravity_g: Skip bodies above this gravity; 0 means no limit
+            max_arrival_ls: Skip bodies further than this from arrival; 0 means no limit
+            sort_by: "distance" or "percent"; empty string selects distance
+            limit: Maximum bodies to return
+
+        Returns:
+            Dict with ranked body candidates, or a structured error object
+        """
+        try:
+            reference = self._resolve_reference_system(reference_system)
+            if "error" in reference:
+                return reference
+            result = await self.spansh_client.find_material_bodies(
+                reference["system"],
+                materials or "",
+                float(min_percent),
+                float(max_distance_ly),
+                float(max_gravity_g),
+                float(max_arrival_ls),
+                sort_by or "",
+                limit
+            )
+            if "error" not in result:
+                result["reference_source"] = reference["source"]
+            return result
+        except Exception as e:
+            logger.error(f"Error finding material bodies: {e}")
+            return {"error": str(e)}
+
+    async def find_commodity_market(
+        self,
+        commodity: str,
+        mode: str = "buy",
+        reference_system: str = "",
+        min_quantity: int = 1,
+        max_distance_ly: float = 50.0,
+        large_pad_only: bool = False,
+        include_fleet_carriers: bool = False,
+        max_data_age_days: float = 30.0,
+        max_arrival_ls: float = 0.0,
+        sort_by: str = "distance",
+        limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Find stations where a commodity can be bought or sold, using Spansh.
+
+        Args:
+            commodity: Commodity name, any capitalisation
+            mode: "buy" or "sell"; empty string selects buy
+            reference_system: System to search around; empty selects current system
+            min_quantity: Minimum stock (buy) or demand (sell)
+            max_distance_ly: Search radius in light years
+            large_pad_only: Only stations with a large landing pad
+            include_fleet_carriers: Include player fleet carriers
+            max_data_age_days: Skip markets not updated within this many days; 0 means no limit
+            max_arrival_ls: Skip stations further than this from arrival; 0 means no limit
+            sort_by: "distance" or "price"; empty string selects distance
+            limit: Maximum stations to return
+
+        Returns:
+            Dict with ranked stations, or a structured error object
+        """
+        try:
+            reference = self._resolve_reference_system(reference_system)
+            if "error" in reference:
+                return reference
+            result = await self.spansh_client.find_commodity_stations(
+                reference["system"],
+                commodity or "",
+                mode or "",
+                min_quantity,
+                float(max_distance_ly),
+                bool(large_pad_only),
+                bool(include_fleet_carriers),
+                float(max_data_age_days),
+                float(max_arrival_ls),
+                sort_by or "",
+                limit
+            )
+            if "error" not in result:
+                result["reference_source"] = reference["source"]
+            return result
+        except Exception as e:
+            logger.error(f"Error finding commodity market: {e}")
+            return {"error": str(e)}
+
+    async def plot_neutron_route(
+        self,
+        destination: str,
+        origin: str = "",
+        jump_range_ly: float = 0.0,
+        efficiency: int = 60,
+        mode: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Plot a neutron-highway route using Spansh.
+
+        Args:
+            destination: System to travel to
+            origin: System to start from; empty selects current system
+            jump_range_ly: Jump range to plan with; 0 reads the ship from the journal
+            efficiency: Neutron plotter efficiency percent (simple mode only)
+            mode: "fuel", "simple", or empty to pick from what the journal offers
+
+        Returns:
+            Dict with the route waypoints, or a structured error object
+        """
+        try:
+            target = (destination or "").strip()
+            if not target:
+                return {"error": "No destination given"}
+            wanted = (mode or "").strip().lower()
+            if wanted not in ("", "fuel", "simple"):
+                return {"error": "mode must be 'fuel' or 'simple', got '%s'" % mode}
+            start = self._resolve_reference_system(origin)
+            if "error" in start:
+                return start
+
+            # No limit: storage order is not time order, so pick the newest by timestamp.
+            latest_loadout = latest_by_timestamp(self.data_store.get_events_by_type("Loadout"))
+            loadout = (latest_loadout.raw_event or {}) if latest_loadout is not None else {}
+            jump_range = float(jump_range_ly or 0.0)
+            ship = None
+            ship_source = "argument"
+            extra_notes: List[str] = []
+
+            if wanted == "fuel" or (wanted == "" and jump_range <= 0):
+                parsed = ship_from_loadout(loadout)
+                if "error" not in parsed:
+                    ship = parsed
+                    ship_source = "journal_loadout"
+                elif wanted == "fuel":
+                    return {"error": "Fuel mode needs the ship from the journal: " + parsed["error"]}
+                else:
+                    extra_notes.append("Fuel was not modelled: " + parsed["error"] + ".")
+            if ship is None and jump_range <= 0:
+                jump_range = float(loadout.get("MaxJumpRange") or 0.0)
+                ship_source = "journal_max_jump_range"
+                if jump_range <= 0:
+                    return {
+                        "error": "The ship's jump range is not known from the journal yet. "
+                                 "Pass jump_range_ly explicitly."
+                    }
+                extra_notes.append(
+                    "Planned with the journal's maximum jump range, which assumes a "
+                    "nearly empty tank. Pass a lower jump_range_ly for a safer plan."
+                )
+
+            result = await self.spansh_client.plot_neutron_route(
+                start["system"], target, jump_range, efficiency, ship
+            )
+            if "error" not in result:
+                result["origin_source"] = start["source"]
+                result["ship_source"] = ship_source
+                result["notes"].extend(extra_notes)
+                if ship is not None and not ship["has_fuel_scoop"]:
+                    result["notes"].append(
+                        "The ship has no fuel scoop fitted; refuel stops cannot be used."
+                    )
+            return result
+        except Exception as e:
+            logger.error(f"Error plotting neutron route: {e}")
+            return {"error": str(e)}
+
+    # ==================== Trade Planning (Trade Dangerous) ====================
+
+    async def plan_trade_route(
+        self,
+        origin: str = "",
+        destination: str = "",
+        credits: int = 0,
+        cargo_capacity: int = 0,
+        jump_range_ly: float = 0.0,
+        hops: int = 2,
+        max_jumps_per_hop: int = 0,
+        max_data_age_days: float = 2.0,
+        pad_size: str = "",
+        routes: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Plan the most profitable multi-stop trade run using Trade Dangerous.
+
+        Args:
+            origin: "System/Station" or system to start from; empty selects the
+                current station when docked, otherwise the current system
+            destination: Optional place the run must end at
+            credits: Credits to trade with; 0 reads the journal
+            cargo_capacity: Cargo hold in tonnes; 0 reads the journal Loadout
+            jump_range_ly: Jump range; 0 computes the laden range from the Loadout
+            hops: Number of station-to-station trades
+            max_jumps_per_hop: Jumps allowed between stations; 0 lets Trade Dangerous decide
+            max_data_age_days: Ignore prices older than this; 0 means no limit
+            pad_size: "S", "M" or "L"; empty reads the ship from the journal
+            routes: Number of alternative routes to return
+
+        Returns:
+            Dict with planned routes, or a structured error object
+        """
+        try:
+            state = self.data_store.get_game_state()
+            start = (origin or "").strip()
+            origin_source = "argument"
+            if not start:
+                system = state.current_system
+                if not system or system == "Unknown":
+                    return {
+                        "error": "Current system is not known from the journal yet. "
+                                 "Pass origin explicitly."
+                    }
+                docked_at = state.current_station if state.docked else None
+                start = "%s/%s" % (system, docked_at) if docked_at else system
+                origin_source = "current_location"
+
+            # No limit: storage order is not time order, so pick the newest by timestamp.
+            latest_loadout = latest_by_timestamp(self.data_store.get_events_by_type("Loadout"))
+            loadout = (latest_loadout.raw_event or {}) if latest_loadout is not None else {}
+
+            budget = int(credits or 0) or int(state.credits or 0)
+            if budget <= 0:
+                return {"error": "The commander's credits are not known from the journal yet. "
+                                 "Pass credits explicitly."}
+            capacity = int(cargo_capacity or 0) or int(loadout.get("CargoCapacity") or 0)
+            if capacity <= 0:
+                return {"error": "The ship has no cargo hold, or it is not known from the "
+                                 "journal yet. Pass cargo_capacity explicitly."}
+
+            jump_range = float(jump_range_ly or 0.0)
+            range_source = "argument"
+            if jump_range <= 0:
+                ship = ship_from_loadout(loadout)
+                if "error" not in ship:
+                    jump_range = laden_jump_range(ship, capacity)
+                    range_source = "journal_loadout_laden"
+                else:
+                    jump_range = float(loadout.get("MaxJumpRange") or 0.0)
+                    range_source = "journal_max_jump_range"
+                if jump_range <= 0:
+                    return {"error": "The ship's jump range is not known from the journal "
+                                     "yet. Pass jump_range_ly explicitly."}
+
+            pad = (pad_size or "").strip().upper()[:1]
+            if (pad_size or "").strip() and (pad not in ("S", "M", "L") or len(pad_size.strip()) > 6):
+                return {"error": "pad_size must be 'S', 'M' or 'L', got '%s'" % pad_size}
+            if not pad and loadout:
+                known = summarize_loadout(loadout).get("landing_pad") or ""
+                pad = known[:1].upper() if known in ("small", "medium", "large") else ""
+
+            result = await self.trade_client.plan_trade_run(
+                start, (destination or "").strip(), budget, capacity, jump_range,
+                hops, int(max_jumps_per_hop or 0), float(max_data_age_days), pad, routes
+            )
+            fallback_note = None
+            if (
+                "error" in result and origin_source == "current_location"
+                and start != state.current_system
+                and "unknown station" in str(result["error"]).lower()
+            ):
+                # Fleet carriers and other unlisted stations: plan from the system.
+                fallback_note = (
+                    "The current station '%s' is not in the Trade Dangerous database, so "
+                    "the run starts from any station in %s." % (
+                        state.current_station, state.current_system)
+                )
+                start = state.current_system
+                result = await self.trade_client.plan_trade_run(
+                    start, (destination or "").strip(), budget, capacity, jump_range,
+                    hops, int(max_jumps_per_hop or 0), float(max_data_age_days), pad, routes
+                )
+            if "error" not in result:
+                if fallback_note:
+                    result["notes"].append(fallback_note)
+                result["inputs"] = {
+                    "origin_source": origin_source,
+                    "credits_source": "argument" if credits else "journal",
+                    "cargo_capacity_source": "argument" if cargo_capacity else "journal_loadout",
+                    "jump_range_source": range_source,
+                }
+                if range_source == "journal_max_jump_range":
+                    result["notes"].append(
+                        "Jump range is the journal's best-case figure, not the laden "
+                        "range; hops may need more jumps than shown."
+                    )
+            return result
+        except Exception as e:
+            logger.error(f"Error planning trade route: {e}")
+            return {"error": str(e)}
+
     # ==================== Location and Status Tools ====================
-    
+
     async def get_current_location(self) -> Dict[str, Any]:
         """
         Get comprehensive current location information.
@@ -117,7 +541,8 @@ class MCPTools:
             game_state = self.data_store.get_game_state()
             
             # Get recent ship-related events
-            loadout_events = self.data_store.get_events_by_type("Loadout", limit=1)
+            # No limit: storage order is not time order, so pick the newest by timestamp.
+            latest_loadout = latest_by_timestamp(self.data_store.get_events_by_type("Loadout"))
             repair_events = self.data_store.get_events_by_type("Repair", limit=5)
             refuel_events = self.data_store.get_events_by_type("RefuelAll", limit=1)
             
@@ -125,7 +550,9 @@ class MCPTools:
                 "ship_type": game_state.current_ship or "Unknown",
                 "ship_name": game_state.ship_name,
                 "ship_id": game_state.ship_id,
-                "modules": game_state.ship_modules,
+                "modules": [],
+                "module_count": 0,
+                "loadout_timestamp": None,
                 "status": {
                     "docked": game_state.docked,
                     "landed": game_state.landed,
@@ -139,12 +566,18 @@ class MCPTools:
                 "recent_maintenance": []
             }
             
-            # Add loadout details if available
-            if loadout_events:
-                latest = loadout_events[-1]
-                response["hull_value"] = latest.raw_event.get("HullValue", 0)
-                response["modules_value"] = latest.raw_event.get("ModulesValue", 0)
-                response["rebuy"] = latest.raw_event.get("Rebuy", 0)
+            # Add loadout details if available. The Loadout event is the
+            # authority on the ship: type, name, modules, values and ranges.
+            if latest_loadout is not None:
+                summary = summarize_loadout(latest_loadout.raw_event or {})
+                for key in ("ship_type", "ship_name", "ship_id"):
+                    if summary.get(key):
+                        response[key] = summary[key]
+                for key in ("landing_pad", "max_jump_range_ly", "cargo_capacity_t",
+                            "fuel_capacity_t", "hull_value", "modules_value", "rebuy",
+                            "capabilities", "can_laser_mine", "module_count", "modules"):
+                    response[key] = summary[key]
+                response["loadout_timestamp"] = latest_loadout.timestamp.isoformat()
             
             # Add recent maintenance
             for repair in repair_events:
@@ -1185,8 +1618,9 @@ class MCPTools:
         """
         try:
             # Get cargo and materials events
-            cargo_events = self.data_store.get_events_by_type("Cargo", limit=1)
-            materials_events = self.data_store.get_events_by_type("Materials", limit=1)
+            # No limit: storage order is not time order, so pick the newest by timestamp.
+            latest_cargo = latest_by_timestamp(self.data_store.get_events_by_type("Cargo"))
+            latest_materials = latest_by_timestamp(self.data_store.get_events_by_type("Materials"))
             
             summary = {
                 "cargo": {},
@@ -1196,12 +1630,14 @@ class MCPTools:
                     "manufactured": {},
                     "encoded": {}
                 },
+                "material_names": {},
+                "snapshot_timestamp": None,
+                "changes_since_snapshot": 0,
                 "recent_changes": []
             }
-            
+
             # Process cargo inventory
-            if cargo_events:
-                latest_cargo = cargo_events[-1]
+            if latest_cargo is not None:
                 if "Inventory" in latest_cargo.raw_event:
                     for item in latest_cargo.raw_event["Inventory"]:
                         summary["cargo"][item["Name"]] = {
@@ -1209,14 +1645,27 @@ class MCPTools:
                             "stolen": item.get("Stolen", 0)
                         }
             
-            # Process materials inventory
-            if materials_events:
-                latest_materials = materials_events[-1]
-                for category in ["Raw", "Manufactured", "Encoded"]:
-                    if category in latest_materials.raw_event:
-                        category_key = category.lower()
-                        for material in latest_materials.raw_event[category]:
-                            summary["materials"][category_key][material["Name"]] = material["Count"]
+            # Process materials inventory: the newest login snapshot plus every
+            # pickup, trade and spend recorded after it.
+            if latest_materials is not None:
+                change_filter = EventFilter(
+                    event_types=set(MATERIAL_CHANGE_EVENTS),
+                    start_time=latest_materials.timestamp
+                )
+                later = [
+                    e for e in self.data_store.query_events(change_filter)
+                    if e.timestamp > latest_materials.timestamp
+                ]
+                computed = compute_material_inventory(latest_materials.raw_event, later)
+                summary["materials"] = computed["materials"]
+                summary["material_names"] = computed["names"]
+                summary["changes_since_snapshot"] = computed["changes_applied"]
+                summary["snapshot_timestamp"] = latest_materials.timestamp.isoformat()
+            else:
+                summary["warning"] = (
+                    "No Materials snapshot is loaded, so the inventory is unknown, not empty. "
+                    "The game writes one at each login."
+                )
 
             # Get fleet carrier cargo from game state
             game_state = self.data_store.get_game_state()

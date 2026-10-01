@@ -117,8 +117,29 @@ class EliteDangerousServer:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
     
+    # Journal events that place the commander in a star system.
+    LOCATION_EVENT_MARKERS = (
+        '"event":"Location"',
+        '"event":"FSDJump"',
+        '"event":"CarrierJump"',
+    )
+    # Upper bound on how many older journals are scanned to find a location.
+    MAX_LOCATION_LOOKBACK_FILES = 50
+
+    def _journal_has_location(self, file_path: Path) -> bool:
+        """Return True if a journal file contains an event that sets the current system."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    compact = line.replace('": "', '":"')
+                    if any(marker in compact for marker in self.LOCATION_EVENT_MARKERS):
+                        return True
+        except OSError as e:
+            logger.debug(f"Could not scan {file_path.name} for location events: {e}")
+        return False
+
     async def load_historical_data(self, hours_back: int = 24):
-        """Load historical journal data from recent files."""
+        """Load historical journal data from recent files, oldest first."""
         try:
             logger.info(f"Loading historical data from last {hours_back} hours...")
 
@@ -128,15 +149,34 @@ class EliteDangerousServer:
             # Initialize journal parser
             journal_parser = JournalParser(self.config.journal_path)
 
-            # Find recent journal files
+            # find_journal_files() returns newest first. The newest file is
+            # skipped here because the journal monitor replays it on startup;
+            # loading it twice would store each of its events twice.
             all_files = journal_parser.find_journal_files()
+            latest_file = all_files[0] if all_files else None
+            older_files = all_files[1:]
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_back)
 
             recent_files = []
-            for file_path in all_files:
+            for file_path in older_files:
                 file_timestamp = journal_parser._extract_timestamp_from_filename(file_path)
                 if file_timestamp > cutoff_time:
                     recent_files.append(file_path)
+
+            # The commander stays where the last session left them, however
+            # long ago that was. If nothing loaded so far places them in a
+            # system, walk back until a journal with a location event is found.
+            in_window = recent_files + ([latest_file] if latest_file else [])
+            if not any(self._journal_has_location(f) for f in in_window):
+                lookback = older_files[len(recent_files):][:self.MAX_LOCATION_LOOKBACK_FILES]
+                for file_path in lookback:
+                    recent_files.append(file_path)
+                    if self._journal_has_location(file_path):
+                        logger.info(f"Extended history to {file_path.name} to find current location")
+                        break
+
+            # Replay oldest first so newer state overwrites older state.
+            recent_files.reverse()
 
             logger.info(f"Found {len(recent_files)} recent journal files to process")
 
@@ -493,7 +533,265 @@ class EliteDangerousServer:
         async def get_engineering_summary(time_range_hours: int = 24) -> Dict[str, Any]:
             """Get detailed engineering activity summary including modifications and engineers visited."""
             return await self.mcp_tools.get_activity_summary("engineering", time_range_hours)
-        
+
+        # ==================== Nearby Search Tools (Spansh) ====================
+
+        @self.app.tool()
+        async def find_mining_hotspots(
+            commodity: str = "Platinum",
+            reference_system: str = "",
+            min_hotspots: int = 1,
+            max_distance_ly: float = 100.0,
+            pristine_only: bool = False,
+            limit: int = 10
+        ) -> Dict[str, Any]:
+            """
+            Find the nearest planetary ring hotspots for a mining commodity, using Spansh.
+
+            Searches outward from the commander's current system unless
+            reference_system is given. This makes a network request to spansh.co.uk.
+
+            Args:
+                commodity: Laser mining: Platinum, Painite, Bromellite, Tritium,
+                           Low Temperature Diamonds. Core mining: Alexandrite, Benitoite,
+                           Grandidierite, Monazite, Musgravite, Rhodplumsite, Serendibite,
+                           Void Opal.
+                reference_system: System to search around. Empty = current system.
+                min_hotspots: Minimum hotspots of the commodity within one ring.
+                max_distance_ly: Search radius in light years.
+                pristine_only: Only rings with pristine reserves.
+                limit: Maximum bodies to return (max 50).
+            """
+            return await self.mcp_tools.find_mining_hotspots(
+                commodity=commodity,
+                reference_system=reference_system,
+                min_hotspots=min_hotspots,
+                max_distance_ly=max_distance_ly,
+                pristine_only=pristine_only,
+                limit=limit
+            )
+
+        @self.app.tool()
+        async def find_exobiology_targets(
+            reference_system: str = "",
+            min_bio_signals: int = 2,
+            max_distance_ly: float = 50.0,
+            max_gravity_g: float = 0.0,
+            max_arrival_ls: float = 0.0,
+            limit: int = 10
+        ) -> Dict[str, Any]:
+            """
+            Find the nearest landable bodies with biological signals, using Spansh.
+
+            Searches outward from the commander's current system unless
+            reference_system is given. Returns known genera, known species with
+            scan values, and how many signals are still unidentified. This makes a
+            network request to spansh.co.uk. Results are bodies someone has already
+            scanned, so they are not undiscovered.
+
+            Args:
+                reference_system: System to search around. Empty = current system.
+                min_bio_signals: Minimum biological signals on the body.
+                max_distance_ly: Search radius in light years.
+                max_gravity_g: Skip bodies above this gravity. 0 = no limit.
+                max_arrival_ls: Skip bodies further than this from the arrival star. 0 = no limit.
+                limit: Maximum bodies to return (max 50).
+            """
+            return await self.mcp_tools.find_exobiology_targets(
+                reference_system=reference_system,
+                min_bio_signals=min_bio_signals,
+                max_distance_ly=max_distance_ly,
+                max_gravity_g=max_gravity_g,
+                max_arrival_ls=max_arrival_ls,
+                limit=limit
+            )
+
+        @self.app.tool()
+        async def find_material_bodies(
+            materials: str,
+            reference_system: str = "",
+            min_percent: float = 0.0,
+            max_distance_ly: float = 50.0,
+            max_gravity_g: float = 0.0,
+            max_arrival_ls: float = 0.0,
+            sort_by: str = "distance",
+            limit: int = 10
+        ) -> Dict[str, Any]:
+            """
+            Find landable bodies carrying raw engineering materials, using Spansh.
+
+            Use this to find where to surface-prospect for a raw material such as
+            Selenium or Cadmium. Searches outward from the commander's current
+            system unless reference_system is given. This makes a network request
+            to spansh.co.uk.
+
+            Args:
+                materials: One raw material, or several separated by commas, e.g.
+                           "Selenium" or "Selenium,Cadmium". Bodies must carry all
+                           of them. The first is the primary material.
+                reference_system: System to search around. Empty = current system.
+                min_percent: Minimum surface share of the primary material.
+                max_distance_ly: Search radius in light years.
+                max_gravity_g: Skip bodies above this gravity. 0 = no limit.
+                max_arrival_ls: Skip bodies further than this from the arrival star. 0 = no limit.
+                sort_by: "distance" (nearest first) or "percent" (richest first).
+                limit: Maximum bodies to return (max 50).
+            """
+            return await self.mcp_tools.find_material_bodies(
+                materials=materials,
+                reference_system=reference_system,
+                min_percent=min_percent,
+                max_distance_ly=max_distance_ly,
+                max_gravity_g=max_gravity_g,
+                max_arrival_ls=max_arrival_ls,
+                sort_by=sort_by,
+                limit=limit
+            )
+
+        @self.app.tool()
+        async def find_commodity_market(
+            commodity: str,
+            mode: str = "buy",
+            reference_system: str = "",
+            min_quantity: int = 1,
+            max_distance_ly: float = 50.0,
+            large_pad_only: bool = False,
+            include_fleet_carriers: bool = False,
+            max_data_age_days: float = 30.0,
+            max_arrival_ls: float = 0.0,
+            sort_by: str = "distance",
+            limit: int = 10
+        ) -> Dict[str, Any]:
+            """
+            Find stations where a commodity can be bought or sold, using Spansh.
+
+            Answers "where can I buy Tritium nearby" and "where do I sell this
+            Palladium for the most". Searches outward from the commander's
+            current system unless reference_system is given. This makes a network
+            request to spansh.co.uk.
+
+            Args:
+                commodity: Commodity name, e.g. "Tritium". Capitalisation does not
+                           matter; a misspelt name returns suggestions.
+                mode: "buy" (stations selling it to you) or "sell" (stations buying it).
+                reference_system: System to search around. Empty = current system.
+                min_quantity: Minimum units in stock (buy) or of demand (sell).
+                max_distance_ly: Search radius in light years.
+                large_pad_only: Only stations with a large landing pad.
+                include_fleet_carriers: Include player fleet carriers. Off by
+                           default because their data is often stale.
+                max_data_age_days: Skip markets not updated within this many days.
+                           0 = no limit.
+                max_arrival_ls: Skip stations further than this from the arrival star.
+                           0 = no limit.
+                sort_by: "distance" (nearest first) or "price" (cheapest when
+                           buying, highest when selling).
+                limit: Maximum stations to return (max 50).
+            """
+            return await self.mcp_tools.find_commodity_market(
+                commodity=commodity,
+                mode=mode,
+                reference_system=reference_system,
+                min_quantity=min_quantity,
+                max_distance_ly=max_distance_ly,
+                large_pad_only=large_pad_only,
+                include_fleet_carriers=include_fleet_carriers,
+                max_data_age_days=max_data_age_days,
+                max_arrival_ls=max_arrival_ls,
+                sort_by=sort_by,
+                limit=limit
+            )
+
+        @self.app.tool()
+        async def plot_neutron_route(
+            destination: str,
+            origin: str = "",
+            jump_range_ly: float = 0.0,
+            efficiency: int = 60,
+            mode: str = ""
+        ) -> Dict[str, Any]:
+            """
+            Plot a long-distance neutron-highway route, using Spansh.
+
+            Starts from the commander's current system unless origin is given.
+            By default the ship is read from the journal Loadout and Spansh
+            models fuel for every jump, marking neutron stars to supercharge
+            at and stars where the ship must refuel. This makes network
+            requests to spansh.co.uk and can take up to two minutes. Spansh
+            only routes through neutron stars players have reported.
+
+            Args:
+                destination: System to travel to.
+                origin: System to start from. Empty = current system.
+                jump_range_ly: Plan with this jump range instead of the journal
+                           ship. Selects the simple plotter. 0 = use the journal.
+                efficiency: Simple plotter only. How far off the direct line
+                           to go for a neutron star, 1-100. 60 is the usual choice.
+                mode: "fuel" (every jump with fuel levels, needs the journal
+                           ship), "simple" (neutron waypoints only), or empty
+                           to use fuel when the journal ship allows it.
+            """
+            return await self.mcp_tools.plot_neutron_route(
+                destination=destination,
+                origin=origin,
+                jump_range_ly=jump_range_ly,
+                efficiency=efficiency,
+                mode=mode
+            )
+
+        @self.app.tool()
+        async def plan_trade_route(
+            origin: str = "",
+            destination: str = "",
+            credits: int = 0,
+            cargo_capacity: int = 0,
+            jump_range_ly: float = 0.0,
+            hops: int = 2,
+            max_jumps_per_hop: int = 0,
+            max_data_age_days: float = 2.0,
+            pad_size: str = "",
+            routes: int = 1
+        ) -> Dict[str, Any]:
+            """
+            Plan the most profitable multi-stop trade run, using Trade Dangerous.
+
+            Answers "what is the best trade loop from here with my ship and
+            credits". Works out what to buy and sell at each stop. By default
+            it starts from the commander's current station and reads credits,
+            cargo capacity, laden jump range and pad size from the journal.
+            Runs locally against the Trade Dangerous price database, which
+            must be installed and imported separately; it makes no network
+            request. Can take a minute or more for several hops.
+
+            Args:
+                origin: "System/Station" or a system name. Empty = current
+                           station when docked, otherwise current system.
+                destination: Optional "System/Station" or system the run must end at.
+                credits: Credits to trade with. 0 = read from the journal.
+                cargo_capacity: Cargo hold in tonnes. 0 = read from the journal.
+                jump_range_ly: Jump range per jump. 0 = laden range computed
+                           from the journal ship.
+                hops: Number of station-to-station trades (max 6).
+                max_jumps_per_hop: Jumps allowed between two stations. 0 = let
+                           Trade Dangerous decide.
+                max_data_age_days: Ignore prices older than this. 0 = no limit.
+                pad_size: Smallest acceptable landing pad: "S", "M" or "L".
+                           Empty = the journal ship's pad size.
+                routes: Number of alternative routes to return (max 5).
+            """
+            return await self.mcp_tools.plan_trade_route(
+                origin=origin,
+                destination=destination,
+                credits=credits,
+                cargo_capacity=cargo_capacity,
+                jump_range_ly=jump_range_ly,
+                hops=hops,
+                max_jumps_per_hop=max_jumps_per_hop,
+                max_data_age_days=max_data_age_days,
+                pad_size=pad_size,
+                routes=routes
+            )
+
         # ==================== Journey and Navigation Tools ====================
         
         @self.app.tool()

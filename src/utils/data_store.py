@@ -170,17 +170,24 @@ class DataStore:
             'ShipyardSwap': self._handle_ship_swap,
             'Status': self._handle_status_update,
             'Location': self._handle_location_update,
+            # Written instead of FSDJump when the commander is aboard a
+            # fleet carrier that jumps. Carries the same fields as Location.
+            'CarrierJump': self._handle_location_update,
             'CargoTransfer': self._handle_cargo_transfer,
             'Statistics': self._handle_statistics_update,
         }
     
-    def store_event(self, event: ProcessedEvent) -> None:
+    def store_event(self, event: ProcessedEvent, update_state: bool = True) -> None:
         """
         Store a processed event and update game state.
 
         Args:
             event: The processed event to store
-            
+            update_state: Apply the event to the current game state. Pass
+                False for events loaded out of order, such as an on-demand
+                historical query, so old events cannot overwrite where the
+                commander is now.
+
         Raises:
             EventStorageError: If there's an error storing the event
         """
@@ -201,8 +208,9 @@ class DataStore:
                 self._stats['events_by_category_count'][event.category] += 1
                 
                 # Update game state
-                self._update_game_state(event)
-                
+                if update_state:
+                    self._update_game_state(event)
+
                 # Perform cleanup if needed
                 self._cleanup_if_needed()
                 
@@ -336,7 +344,9 @@ class DataStore:
                                         )
 
                                         if not is_duplicate:
-                                            self.store_event(processed_event)
+                                            # History is a lookup, not a replay: it must
+                                            # never change the current game state.
+                                            self.store_event(processed_event, update_state=False)
                                             events_loaded += 1
 
                             except Exception as e:
@@ -631,6 +641,26 @@ class DataStore:
         if handler:
             handler(event)
     
+    @staticmethod
+    def _extract_coordinates(data: Dict[str, Any], raw_data: Dict[str, Any]) -> Optional[Dict[str, float]]:
+        """
+        Extract galactic coordinates from an event.
+
+        The journal writes them as "StarPos": [x, y, z]. Returns None when the
+        event carries no usable position.
+        """
+        star_pos = data.get('star_pos')
+        if isinstance(star_pos, dict) and all(star_pos.get(k) is not None for k in ('x', 'y', 'z')):
+            return {'x': star_pos['x'], 'y': star_pos['y'], 'z': star_pos['z']}
+        split = [data.get('star_pos_x'), data.get('star_pos_y'), data.get('star_pos_z')]
+        if all(value is not None for value in split):
+            return {'x': split[0], 'y': split[1], 'z': split[2]}
+        if not isinstance(star_pos, (list, tuple)):
+            star_pos = raw_data.get('StarPos')
+        if isinstance(star_pos, (list, tuple)) and len(star_pos) == 3:
+            return {'x': star_pos[0], 'y': star_pos[1], 'z': star_pos[2]}
+        return None
+
     def _handle_fsd_jump(self, event: ProcessedEvent) -> None:
         """Handle FSD jump events."""
         # Use both key_data and raw_event to extract system information
@@ -645,11 +675,7 @@ class DataStore:
         )
 
         self._game_state.current_system = system_name
-        self._game_state.coordinates = {
-            'x': data.get('star_pos_x') or raw_data.get('StarPosX'),
-            'y': data.get('star_pos_y') or raw_data.get('StarPosY'),
-            'z': data.get('star_pos_z') or raw_data.get('StarPosZ')
-        }
+        self._game_state.coordinates = self._extract_coordinates(data, raw_data)
         self._game_state.current_station = None
         self._game_state.current_body = None
         self._game_state.docked = False
@@ -685,7 +711,14 @@ class DataStore:
         )
 
         self._game_state.current_station = station_name
-    
+
+        # Docked names the system too. Trust it, so a missed jump event
+        # cannot leave the commander in the wrong system.
+        system_name = data.get('system') or data.get('system_name') or raw_data.get('StarSystem')
+        if system_name and system_name != self._game_state.current_system:
+            self._game_state.current_system = system_name
+            self._game_state.coordinates = None
+
     def _handle_undocked(self, event: ProcessedEvent) -> None:
         """Handle undocking events."""
         self._game_state.docked = False
@@ -778,27 +811,40 @@ class DataStore:
     
     def _handle_status_update(self, event: ProcessedEvent) -> None:
         """Handle status file updates."""
-        # FIXED: use key_data instead of extracted_data
-        data = event.key_data
-        
-        # Update various status flags
-        flags = data.get('flags', 0)
-        self._game_state.docked = bool(flags & 0x01)
-        self._game_state.landed = bool(flags & 0x02)
-        self._game_state.supercruise = bool(flags & 0x10)
-        self._game_state.fsd_charging = bool(flags & 0x20)
-        self._game_state.fsd_cooldown = bool(flags & 0x40)
-        self._game_state.low_fuel = bool(flags & 0x80)
-        self._game_state.overheating = bool(flags & 0x100)
-        self._game_state.has_lat_long = bool(flags & 0x200)
-        self._game_state.is_in_danger = bool(flags & 0x400)
-        self._game_state.being_interdicted = bool(flags & 0x800)
-        self._game_state.in_main_ship = bool(flags & 0x1000)
-        self._game_state.in_fighter = bool(flags & 0x2000)
-        self._game_state.in_srv = bool(flags & 0x4000)
-        self._game_state.analysis_mode = bool(flags & 0x8000)
-        self._game_state.night_vision = bool(flags & 0x10000)
-        self._game_state.altitude_from_average_radius = bool(flags & 0x20000)
+        data = event.key_data or {}
+        raw_data = event.raw_event or {}
+
+        flags = data.get('flags')
+        if flags is None:
+            flags = raw_data.get('Flags')
+        flags2 = data.get('flags2')
+        if flags2 is None:
+            flags2 = raw_data.get('Flags2')
+
+        # With the game closed or at the main menu Status.json carries no
+        # flags (or all zero). That says nothing about the commander, so keep
+        # the state the journal established.
+        if not flags and not flags2:
+            return
+        flags = int(flags or 0)
+
+        # Bit positions follow the Elite Dangerous journal manual, Status file.
+        self._game_state.docked = bool(flags & 0x00000001)
+        self._game_state.landed = bool(flags & 0x00000002)
+        self._game_state.supercruise = bool(flags & 0x00000010)
+        self._game_state.fsd_charging = bool(flags & 0x00020000)
+        self._game_state.fsd_cooldown = bool(flags & 0x00040000)
+        self._game_state.low_fuel = bool(flags & 0x00080000)
+        self._game_state.overheating = bool(flags & 0x00100000)
+        self._game_state.has_lat_long = bool(flags & 0x00200000)
+        self._game_state.is_in_danger = bool(flags & 0x00400000)
+        self._game_state.being_interdicted = bool(flags & 0x00800000)
+        self._game_state.in_main_ship = bool(flags & 0x01000000)
+        self._game_state.in_fighter = bool(flags & 0x02000000)
+        self._game_state.in_srv = bool(flags & 0x04000000)
+        self._game_state.analysis_mode = bool(flags & 0x08000000)
+        self._game_state.night_vision = bool(flags & 0x10000000)
+        self._game_state.altitude_from_average_radius = bool(flags & 0x20000000)
     
     def _handle_location_update(self, event: ProcessedEvent) -> None:
         """Handle location updates."""
@@ -838,8 +884,9 @@ class DataStore:
         if docked is not None:
             self._game_state.docked = docked
 
-        if 'star_pos' in data:
-            self._game_state.coordinates = data['star_pos']
+        coordinates = self._extract_coordinates(data, raw_data)
+        if coordinates is not None:
+            self._game_state.coordinates = coordinates
 
     def _handle_cargo_transfer(self, event: ProcessedEvent) -> None:
         """Handle cargo transfer events to/from fleet carrier."""

@@ -6,6 +6,7 @@ aiofiles>=24.1.0
 pydantic>=2.6.0
 pydantic-settings>=2.5.2
 psutil>=5.9.0
+httpx>=0.27.0
 
 # Development and testing dependencies
 pytest>=8.0.0

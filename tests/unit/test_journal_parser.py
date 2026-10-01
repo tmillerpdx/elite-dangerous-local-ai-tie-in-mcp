@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -270,9 +270,9 @@ class TestJournalParser:
         ]
         
         expected_timestamps = [
-            datetime(2024, 9, 6, 12, 0, 0),
-            datetime(2023, 12, 25, 23, 59, 59),
-            datetime(2020, 1, 1, 0, 0, 0),
+            datetime(2024, 9, 6, 12, 0, 0).astimezone(timezone.utc),
+            datetime(2023, 12, 25, 23, 59, 59).astimezone(timezone.utc),
+            datetime(2020, 1, 1, 0, 0, 0).astimezone(timezone.utc),
         ]
         
         for file_path, expected in zip(test_files, expected_timestamps):
@@ -289,7 +289,7 @@ class TestJournalParser:
         
         for file_path in invalid_files:
             result = parser._extract_timestamp_from_filename(file_path)
-            assert result == datetime.fromtimestamp(0)  # Epoch fallback
+            assert result == datetime.fromtimestamp(0, timezone.utc)  # Epoch fallback
     
     def test_get_file_info(self, parser):
         """Test getting file information."""
