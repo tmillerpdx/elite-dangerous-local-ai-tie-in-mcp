@@ -13,9 +13,11 @@ from enum import Enum
 try:
     from ..journal.events import EventCategory, ProcessedEvent
     from ..utils.data_store import EventFilter, QuerySortOrder, GameState
+    from ..utils.spansh_client import SpanshClient
 except ImportError:
     from src.journal.events import EventCategory, ProcessedEvent
     from src.utils.data_store import EventFilter, QuerySortOrder, GameState
+    from src.utils.spansh_client import SpanshClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +46,122 @@ class MCPTools:
     - Performance metrics and statistics
     """
     
-    def __init__(self, data_store):
+    def __init__(self, data_store, spansh_client=None):
         """
         Initialize MCP tools with data store reference.
-        
+
         Args:
             data_store: Reference to the global data store
+            spansh_client: Optional SpanshClient, injectable for tests
         """
         self.data_store = data_store
+        self.spansh_client = spansh_client or SpanshClient()
         logger.info("MCP Tools initialized")
-    
+
+    # ==================== Nearby Search Tools (Spansh) ====================
+
+    def _resolve_reference_system(self, reference_system: str) -> Dict[str, Any]:
+        """
+        Pick the system to search around.
+
+        An empty string selects the commander's current system from the journal.
+        Returns {"system", "source"} or a structured error object.
+        """
+        explicit = (reference_system or "").strip()
+        if explicit:
+            return {"system": explicit, "source": "argument"}
+        current = self.data_store.get_game_state().current_system
+        if not current or current == "Unknown":
+            return {
+                "error": "Current system is not known from the journal yet. "
+                         "Pass reference_system explicitly."
+            }
+        return {"system": current, "source": "current_location"}
+
+    async def find_mining_hotspots(
+        self,
+        commodity: str = "Platinum",
+        reference_system: str = "",
+        min_hotspots: int = 1,
+        max_distance_ly: float = 100.0,
+        pristine_only: bool = False,
+        limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Find the nearest ring hotspots for a commodity using Spansh.
+
+        Args:
+            commodity: Hotspot commodity; empty string selects Platinum
+            reference_system: System to search around; empty selects current system
+            min_hotspots: Minimum hotspots of the commodity in a single ring
+            max_distance_ly: Search radius in light years
+            pristine_only: Only return rings with pristine reserves
+            limit: Maximum bodies to return
+
+        Returns:
+            Dict with ranked ring candidates, or a structured error object
+        """
+        try:
+            reference = self._resolve_reference_system(reference_system)
+            if "error" in reference:
+                return reference
+            result = await self.spansh_client.find_ring_hotspots(
+                reference["system"],
+                (commodity or "").strip() or "Platinum",
+                min_hotspots,
+                float(max_distance_ly),
+                bool(pristine_only),
+                limit
+            )
+            if "error" not in result:
+                result["reference_source"] = reference["source"]
+            return result
+        except Exception as e:
+            logger.error(f"Error finding mining hotspots: {e}")
+            return {"error": str(e)}
+
+    async def find_exobiology_targets(
+        self,
+        reference_system: str = "",
+        min_bio_signals: int = 2,
+        max_distance_ly: float = 50.0,
+        max_gravity_g: float = 0.0,
+        max_arrival_ls: float = 0.0,
+        limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Find the nearest landable bodies with biological signals using Spansh.
+
+        Args:
+            reference_system: System to search around; empty selects current system
+            min_bio_signals: Minimum biological signal count on the body
+            max_distance_ly: Search radius in light years
+            max_gravity_g: Skip bodies above this gravity; 0 means no limit
+            max_arrival_ls: Skip bodies further than this from arrival; 0 means no limit
+            limit: Maximum bodies to return
+
+        Returns:
+            Dict with ranked body candidates, or a structured error object
+        """
+        try:
+            reference = self._resolve_reference_system(reference_system)
+            if "error" in reference:
+                return reference
+            result = await self.spansh_client.find_exobiology_bodies(
+                reference["system"],
+                min_bio_signals,
+                float(max_distance_ly),
+                float(max_gravity_g),
+                float(max_arrival_ls),
+                limit
+            )
+            if "error" not in result:
+                result["reference_source"] = reference["source"]
+            return result
+        except Exception as e:
+            logger.error(f"Error finding exobiology targets: {e}")
+            return {"error": str(e)}
+
     # ==================== Location and Status Tools ====================
     
     async def get_current_location(self) -> Dict[str, Any]:

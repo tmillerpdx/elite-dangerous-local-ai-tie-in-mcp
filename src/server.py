@@ -533,7 +533,79 @@ class EliteDangerousServer:
         async def get_engineering_summary(time_range_hours: int = 24) -> Dict[str, Any]:
             """Get detailed engineering activity summary including modifications and engineers visited."""
             return await self.mcp_tools.get_activity_summary("engineering", time_range_hours)
-        
+
+        # ==================== Nearby Search Tools (Spansh) ====================
+
+        @self.app.tool()
+        async def find_mining_hotspots(
+            commodity: str = "Platinum",
+            reference_system: str = "",
+            min_hotspots: int = 1,
+            max_distance_ly: float = 100.0,
+            pristine_only: bool = False,
+            limit: int = 10
+        ) -> Dict[str, Any]:
+            """
+            Find the nearest planetary ring hotspots for a mining commodity, using Spansh.
+
+            Searches outward from the commander's current system unless
+            reference_system is given. This makes a network request to spansh.co.uk.
+
+            Args:
+                commodity: Laser mining: Platinum, Painite, Bromellite, Tritium,
+                           Low Temperature Diamonds. Core mining: Alexandrite, Benitoite,
+                           Grandidierite, Monazite, Musgravite, Rhodplumsite, Serendibite,
+                           Void Opal.
+                reference_system: System to search around. Empty = current system.
+                min_hotspots: Minimum hotspots of the commodity within one ring.
+                max_distance_ly: Search radius in light years.
+                pristine_only: Only rings with pristine reserves.
+                limit: Maximum bodies to return (max 50).
+            """
+            return await self.mcp_tools.find_mining_hotspots(
+                commodity=commodity,
+                reference_system=reference_system,
+                min_hotspots=min_hotspots,
+                max_distance_ly=max_distance_ly,
+                pristine_only=pristine_only,
+                limit=limit
+            )
+
+        @self.app.tool()
+        async def find_exobiology_targets(
+            reference_system: str = "",
+            min_bio_signals: int = 2,
+            max_distance_ly: float = 50.0,
+            max_gravity_g: float = 0.0,
+            max_arrival_ls: float = 0.0,
+            limit: int = 10
+        ) -> Dict[str, Any]:
+            """
+            Find the nearest landable bodies with biological signals, using Spansh.
+
+            Searches outward from the commander's current system unless
+            reference_system is given. Returns known genera, known species with
+            scan values, and how many signals are still unidentified. This makes a
+            network request to spansh.co.uk. Results are bodies someone has already
+            scanned, so they are not undiscovered.
+
+            Args:
+                reference_system: System to search around. Empty = current system.
+                min_bio_signals: Minimum biological signals on the body.
+                max_distance_ly: Search radius in light years.
+                max_gravity_g: Skip bodies above this gravity. 0 = no limit.
+                max_arrival_ls: Skip bodies further than this from the arrival star. 0 = no limit.
+                limit: Maximum bodies to return (max 50).
+            """
+            return await self.mcp_tools.find_exobiology_targets(
+                reference_system=reference_system,
+                min_bio_signals=min_bio_signals,
+                max_distance_ly=max_distance_ly,
+                max_gravity_g=max_gravity_g,
+                max_arrival_ls=max_arrival_ls,
+                limit=limit
+            )
+
         # ==================== Journey and Navigation Tools ====================
         
         @self.app.tool()

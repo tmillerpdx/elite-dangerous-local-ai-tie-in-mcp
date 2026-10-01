@@ -8,12 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Nearby search tools backed by the public Spansh body search:
+  `find_mining_hotspots` (ring hotspots for a commodity) and
+  `find_exobiology_targets` (landable bodies with biological signals).
+  Both default to the commander's current system. New module
+  `src/utils/spansh_client.py`; new dependency `httpx`.
 - Initial project structure and configuration
 - Basic MCP server framework setup
 - Journal monitoring system foundation
 - EDCoPilot integration framework
 - Comprehensive testing infrastructure
 - Documentation and setup guides
+
+### Fixed
+- Current location was wrong after riding a fleet carrier, and after any restart:
+  journal filename timestamps were timezone-naive, which aborted the startup
+  history load; history files were replayed newest-first; and `CarrierJump` had
+  no game-state handler. Startup now also looks back past the 24 hour window
+  until it finds a journal that places the commander in a system.
 
 ### Changed
 - N/A
