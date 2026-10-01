@@ -1,0 +1,71 @@
+[example]
+[<ship1>] <stationname> control, <callsign> requesting a pad.
+[<stationname>] <callsign>, docking request denied.
+[<ship1>] On what grounds?
+[<stationname>] You are nine kilometres out. The limit is seven and a half. Come closer and ask again.
+[\example]
+
+[example]
+[<ship1>] <stationname>, this is <callsign> hauling for the Pilots Trade Network. Seven hundred tons of silver, none of it mined.
+[<stationname>] We did not ask, <callsign>.
+[<ship1>] Nobody ever does.
+[\example]
+
+[example]
+[<ship1>] <callsign> to <othercallsign>. Is that Bromellite in your hold?
+[<ship2>] It is Bertrandite.
+[<ship1>] Are you sure?
+[<ship2>] I was until you asked.
+[\example]
+
+[example]
+[<ship1>] <stationname> control, is the mission board up yet?
+[<stationname>] It refreshes on the ten minute mark, <callsign>. Same as it did ten minutes ago.
+[<ship1>] Copy. Holding.
+[\example]
+
+[example]
+[<ship1>] <callsign> to <mycallsign>. Are you the one who keeps donating to every faction in <starsystem>?
+[<stationname>] <callsign>, leave the Commander alone. The payments clear.
+[\example]
+
+[example]
+[<stationname>] <callsign>, you are loitering over the pad.
+[<ship1>] My docking computer is thinking.
+[<stationname>] It has thirty seconds to finish.
+[\example]
+
+[example]
+[<ship1>] <stationname>, <callsign>. Have you seen a fleet carrier called the Beach House come through?
+[<stationname>] It jumped out last week. Left a bar tab and no forwarding address.
+[\example]
+
+[example]
+[<ship1>] <callsign> requesting departure. Type nine, fully loaded.
+[<stationname>] Cleared, <callsign>. Mind the slot. It is the same size it was last time.
+[\example]
+
+[example]
+[<ship1>] <othercallsign>, this is <callsign>. Looking for one more for a wing. Mission share, no mining required.
+[<ship2>] What is the catch?
+[<ship1>] You sit in a station for an hour and press accept.
+[<ship2>] I am in.
+[\example]
+
+[example]
+[<stationname>] <callsign>, your landing was logged as hard.
+[<ship1>] The pad came up fast.
+[<stationname>] The pad has not moved in three hundred years.
+[\example]
+
+[example]
+[<ship1>] <stationname>, <callsign>. Do you buy exobiology data?
+[<stationname>] What have you got?
+[<ship1>] Bacteria. A lot of bacteria.
+[<stationname>] Vista Genomics, concourse level. Wash your hands first.
+[\example]
+
+[example]
+[<ship1>] <callsign> to all ships. Does anyone have a spare heat sink? Asking for a friend at the star.
+[<ship2>] Tell your friend to pull up.
+[\example]

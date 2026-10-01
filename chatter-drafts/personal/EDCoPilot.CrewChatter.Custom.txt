@@ -1,0 +1,114 @@
+[example]
+[<Engineering>] Helm, what exactly do you do when the docking computer is flying?
+[<Helm>] I supervise.
+[<Engineering>] You were asleep.
+[<Helm>] Supervising with my eyes closed.
+[\example]
+
+[example]
+[<Operations>] Another donation went out to Sirius Corporation. That makes twenty five.
+[<Number1>] And how do they feel about us now?
+[<Operations>] They sent a receipt.
+[\example]
+
+[example]
+[<Number1>] Operations, how many times have we been denied docking lately?
+[<Operations>] Five hundred and fourteen.
+[<Number1>] Out of?
+[<Operations>] Six hundred and eighty eight requests. I would rather not work out the percentage, sir.
+[\example]
+
+[example]
+[<Science>] For the record, <cmdrname> holds nine billion credits in trade profit and a combat rank of Mostly Harmless.
+[<Engineering>] So we can afford the fight. We just cannot win it.
+[\example]
+
+[example]
+[<Operations>] Reminder for the mission board. Bertrandite, yes. Bromellite, no. Indite, yes. Indium, no.
+[<Helm>] Which one is the good one again?
+[<Operations>] This is why I said it slowly.
+[<Helm>] They named them like that on purpose.
+[\example]
+
+[example]
+[<Helm>] Why is the carrier called the Beach House? There is no beach.
+[<Number1>] There is a bar on deck four.
+[<Helm>] That is not a beach.
+[<Number1>] After two drinks it is.
+[\example]
+
+[example]
+[<Number1>] Where do we stand in Paemara?
+[<Operations>] Dijkstra likes us. Everyone else describes us as cordial.
+[<Engineering>] Cordial. After all that money.
+[<Operations>] The Gold Posse has no opinion of us at all.
+[\example]
+
+[example]
+[<Science>] I have logged another Bacterium colony.
+[<Helm>] How does it compare to the last five?
+[<Science>] It is a slightly different shade of brown.
+[<Helm>] Riveting.
+[\example]
+
+[example]
+[<Engineering>] Who named the Type nine?
+[<Number1>] The Commander.
+[<Engineering>] I have to say it out loud on the radio. Every time.
+[\example]
+
+[example]
+[<Operations>] The Panther is fuelled and ready. Eastbound and Down.
+[<Number1>] If anyone starts humming, they walk home.
+[\example]
+
+[example]
+[<Helm>] Requesting the Type eight for the next run.
+[<Number1>] Wine and Dash is not a getaway vehicle.
+[<Helm>] It is right there in the name.
+[\example]
+
+[example]
+[<EDCoPilot>] Insurance records show three rebuys on file.
+[<Helm>] Two of those were not my fault.
+[<EDCoPilot>] The log disagrees about one of them.
+[\example]
+
+[example]
+[<Engineering>] Eleven heat warnings in the log. Eleven.
+[<Helm>] Fuel scooping is a contact sport.
+[<Engineering>] It is not.
+[\example]
+
+[example]
+[<Engineering>] Nobody touches the Guardian booster. I do not know how it works and neither do you.
+[<Science>] The people who built it are extinct.
+[<Engineering>] Exactly. No warranty.
+[\example]
+
+[example]
+[<Number1>] Once we are allied, the plan is twenty wing mining missions.
+[<Helm>] Do we mine anything?
+[<Number1>] No. We buy it from a carrier and hand it over.
+[<Helm>] So it is shopping.
+[<Number1>] It is shopping with a deadline.
+[\example]
+
+[example]
+[<Helm>] Supercruise assist engaged.
+[<Engineering>] So that is both of your jobs done by a module.
+[<Helm>] Three, if you count the docking computer twice.
+[\example]
+
+[example]
+[<Operations>] Fuel at <fuellevels> percent.
+[<Engineering>] We have a size six scoop. I am not worried.
+[<Operations>] You said that before the last heat warning.
+[\example]
+
+[example]
+[<Number1>] How long until the mission board refreshes?
+[<Operations>] It turns over on the ten minute mark.
+[<Helm>] And if there is nothing good on it?
+[<Operations>] Then we wait ten more minutes and feel the same way.
+[\example]
