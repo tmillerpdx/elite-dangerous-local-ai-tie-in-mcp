@@ -24,6 +24,8 @@ Read `references/tools.md` when you need the full tool list, parameters, or the 
 | Where is exobiology worth doing? | `find_exobiology_targets` | Returns known species and their scan values. |
 | Where do I farm raw material X? | `find_material_bodies` | Takes several materials, comma separated, to find one body with all of them. |
 | What should I haul? Best trade loop from here? | `plan_trade_route` | Trade Dangerous, local database. Reads credits, hold, range and pad from the journal. State `database_age_days`. Slow: up to two minutes. |
+| How's my stack? What WMMs do I have? When does it expire? | `get_wmm_stack` | Wing mining missions. Report every flagged mission and the earliest expiry. |
+| What's my rep in Mbutas or Paemara? Who am I not Allied with? | `get_faction_reputation` | State `age_days`; the value only updates on a visit. |
 | How do I get to a far-off system? | `plot_neutron_route` | Reads the ship from the journal and models fuel per jump. Slow: up to two minutes. Summarise long routes. |
 | What did I just do? | `get_recent_events` or `search_events` | Raw events. Trusted as a record of what happened. |
 | How did the session go? Earnings? | A summary tool, then verify | See "Unverified numbers" below. |

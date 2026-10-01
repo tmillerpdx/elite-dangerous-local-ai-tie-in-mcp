@@ -15,6 +15,10 @@ try:
     from ..utils.data_store import EventFilter, QuerySortOrder, GameState
     from ..utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
     from ..utils.trade_dangerous import TradeDangerousClient
+    from ..utils.wmm import (
+        REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS, build_wmm_stack,
+        faction_reputation, read_recent_journal_events
+    )
     from ..utils.inventory import (
         MATERIAL_CHANGE_EVENTS, compute_material_inventory, latest_by_timestamp, summarize_loadout
     )
@@ -23,6 +27,10 @@ except ImportError:
     from src.utils.data_store import EventFilter, QuerySortOrder, GameState
     from src.utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
     from src.utils.trade_dangerous import TradeDangerousClient
+    from src.utils.wmm import (
+        REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS, build_wmm_stack,
+        faction_reputation, read_recent_journal_events
+    )
     from src.utils.inventory import (
         MATERIAL_CHANGE_EVENTS, compute_material_inventory, latest_by_timestamp, summarize_loadout
     )
@@ -54,7 +62,7 @@ class MCPTools:
     - Performance metrics and statistics
     """
     
-    def __init__(self, data_store, spansh_client=None, trade_client=None):
+    def __init__(self, data_store, spansh_client=None, trade_client=None, journal_reader=None):
         """
         Initialize MCP tools with data store reference.
 
@@ -62,10 +70,13 @@ class MCPTools:
             data_store: Reference to the global data store
             spansh_client: Optional SpanshClient, injectable for tests
             trade_client: Optional TradeDangerousClient, injectable for tests
+            journal_reader: Optional callable (days, event_types) -> raw journal
+                events in time order, injectable for tests
         """
         self.data_store = data_store
         self.spansh_client = spansh_client or SpanshClient()
         self.trade_client = trade_client or TradeDangerousClient()
+        self.journal_reader = journal_reader or self._read_journal_files
         logger.info("MCP Tools initialized")
 
     # ==================== Nearby Search Tools (Spansh) ====================
@@ -476,6 +487,71 @@ class MCPTools:
             return result
         except Exception as e:
             logger.error(f"Error planning trade route: {e}")
+            return {"error": str(e)}
+
+    # ==================== Wing Mining Missions and Reputation ====================
+
+    # A mission lasts up to a week; two weeks of journals covers every active one.
+    WMM_STACK_LOOKBACK_DAYS = 14
+    REPUTATION_LOOKBACK_DAYS = 180
+
+    def _read_journal_files(self, days: float, event_types: Set[str]) -> List[Dict[str, Any]]:
+        """Read raw events of the given types from recent journal files."""
+        return read_recent_journal_events(
+            getattr(self.data_store, "journal_path", None), days, event_types,
+            datetime.now(timezone.utc)
+        )
+
+    async def get_wmm_stack(self, cargo_capacity: int = 0) -> Dict[str, Any]:
+        """
+        Show the active wing mining mission stack, rebuilt from the journal.
+
+        Args:
+            cargo_capacity: Cargo hold in tonnes for the hauling plan; 0 reads
+                the journal Loadout
+
+        Returns:
+            Dict with missions, per-commodity totals and expiry, or a structured error object
+        """
+        try:
+            capacity = int(cargo_capacity or 0)
+            if capacity <= 0:
+                latest_loadout = latest_by_timestamp(self.data_store.get_events_by_type("Loadout"))
+                if latest_loadout is not None:
+                    capacity = int((latest_loadout.raw_event or {}).get("CargoCapacity") or 0)
+            events = self.journal_reader(self.WMM_STACK_LOOKBACK_DAYS, STACK_EVENT_TYPES)
+            result = build_wmm_stack(events, datetime.now(timezone.utc), capacity)
+            result["notes"] = [
+                "Rebuilt from the last %d days of journal files." % self.WMM_STACK_LOOKBACK_DAYS,
+                "Flags: wrong_commodity (not Gold, Silver, Bertrandite or Indite), "
+                "source_and_return, not_wing, unsupported_station (not Burkin Orbital, "
+                "Darlton Port or Rukavishnikov Terminal), details_unknown (the mission is "
+                "active but its acceptance is not in the journals read, for example one "
+                "shared by a wingmate).",
+                "Flagged missions are left out of the totals and the hauling plan.",
+            ]
+            return result
+        except Exception as e:
+            logger.error(f"Error building WMM stack: {e}")
+            return {"error": str(e)}
+
+    async def get_faction_reputation(self, systems: str = "") -> Dict[str, Any]:
+        """
+        Show reputation with each minor faction from the last visit to each system.
+
+        Args:
+            systems: Comma-separated system names; empty selects the PTN wing
+                mining systems Mbutas and Paemara
+
+        Returns:
+            Dict with factions per system, or a structured error object
+        """
+        try:
+            wanted = [name.strip() for name in (systems or "").split(",") if name.strip()]
+            events = self.journal_reader(self.REPUTATION_LOOKBACK_DAYS, REPUTATION_EVENT_TYPES)
+            return faction_reputation(events, wanted or list(WMM_SYSTEMS), datetime.now(timezone.utc))
+        except Exception as e:
+            logger.error(f"Error getting faction reputation: {e}")
             return {"error": str(e)}
 
     # ==================== Location and Status Tools ====================
