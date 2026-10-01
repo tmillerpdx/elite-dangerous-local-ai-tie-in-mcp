@@ -1,0 +1,48 @@
+[example]
+[<Helm>] How far to the nearest station?
+[<Operations>] You do not want the number.
+[<Helm>] I asked for the number.
+[<Operations>] It has a comma in it.
+[\example]
+
+[example]
+[<Science>] This system has not been visited before.
+[<Engineering>] I can see why.
+[\example]
+
+[example]
+[<Engineering>] If the fuel scoop fails out here, we walk.
+[<Science>] It is a class five scoop. It will not fail.
+[<Engineering>] I have met the person who installed it.
+[\example]
+
+[example]
+[<Number1>] Next star on the route is a neutron star.
+[<Helm>] In and out of the cone. Easy.
+[<Engineering>] The last four went fine. I would like to stop counting while we are ahead.
+[\example]
+
+[example]
+[<Science>] Seven first footfalls so far, <cmdraddress>.
+[<Helm>] And on how many of those did we find anything?
+[<Science>] Rocks. We found rocks on all seven.
+[\example]
+
+[example]
+[<Operations>] No radio traffic for three days.
+[<Helm>] I miss being denied docking.
+[\example]
+
+[example]
+[<Science>] Biological signals on the second planet.
+[<Helm>] If it is bacteria again I am staying in the ship.
+[<Science>] There are two signals. One of them could be anything.
+[<Helm>] And the other?
+[<Science>] Bacteria.
+[\example]
+
+[example]
+[<Engineering>] The repair limpets are for emergencies.
+[<Helm>] That was an emergency.
+[<Engineering>] You scraped a rock taking a picture.
+[\example]

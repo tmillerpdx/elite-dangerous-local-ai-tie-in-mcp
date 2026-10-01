@@ -2,7 +2,7 @@
 
 Tool names are prefixed `mcp__elite-dangerous__`. Status reflects what has been checked against the commander's real journals. Update this file when a tool is added, fixed or found wrong.
 
-Contents: search tools, route tool, trade planning tool, state tools, event tools, summaries, known wrong, do not use, Spansh behaviour.
+Contents: search tools, route tool, trade planning tool, wing mining tools, state tools, event tools, summaries, known wrong, do not use, Spansh behaviour.
 
 ## Search tools (trusted)
 
@@ -103,6 +103,28 @@ The response has `origin`, `search`, `inputs` (where each default came from), `d
 
 The database is only as fresh as its last import, which the commander runs by hand. Always state `database_age_days`; per-price ages are not available. If the commander is docked on a fleet carrier the run starts from the system instead, and a note says so. A remote system can return "no profitable trade"; suggest a larger `max_jumps_per_hop` or a different origin. For a single commodity, `find_commodity_market` is live and quicker; use this tool when the question is what to haul, or a loop of several stops.
 
+## Wing mining mission (WMM) tools (new, checked against real journals with no active stack)
+
+Both read the journal files directly on every call, so they see more than the server's one-day event window. Local files only.
+
+### get_wmm_stack
+The active mission stack. Parameter: `cargo_capacity` (0 = the journal ship's hold) for the hauling plan.
+
+Returns `wmm_count` (good missions), `flagged_count`, `active_mission_count` and `mission_slots_left` (the game limit is 20 missions of any kind), `total_reward`, `earliest_expiry` (`mission_id`, `expiry`, `hours_left`, `alert` when under 48 hours), `totals_by_commodity` (`missions`, `tons_required`, `tons_delivered`, `tons_remaining`, `reward`), `hauling_plan` (`loads_by_commodity`, `total_tons_remaining`, `total_loads`), `missions` and `board_refresh` (next ten-minute boundary).
+
+Each mission: `mission_id`, `title`, `faction`, `station`, `system`, `commodity`, `tons_required`, `tons_delivered`, `tons_remaining`, `reward`, `expiry`, `hours_left`, `wing`, `flags`.
+
+Flags: `wrong_commodity` (anything but Gold, Silver, Bertrandite, Indite; this catches Bromellite and Indium), `source_and_return`, `not_wing`, `unsupported_station` (not Burkin Orbital or Darlton Port in Mbutas, or Rukavishnikov Terminal in Paemara), `details_unknown` (active, but its acceptance is not in the last 14 days of journals; a mission shared by a wingmate looks like this). Flagged missions are left out of the totals and the hauling plan. Tell the commander about every flagged mission.
+
+Not yet seen with a real stack: the commander had no wing mining missions when this was built, so the source-and-return check (mission name contains "Collect") and how missions received from wingmates appear are untested against real data.
+
+### get_faction_reputation
+Reputation per minor faction. Parameter: `systems`, comma separated; empty = Mbutas and Paemara.
+
+Per system: `as_of` and `age_days` (when the game last wrote it), `factions` (`faction`, `reputation` from -100 to 100, `standing`, `allied`, `state`, `influence_percent`, `offers_wmm`), `not_allied`, `not_at_full_reputation`. A system not visited in the last 180 days of journals comes back with a note instead.
+
+The value only updates when the commander enters or logs in to the system, so always state `age_days`. Allied is taken as 90 or more; that threshold is documented for superpowers and assumed for minor factions. Paemara Gold Posse offers no wing mining missions and is left out of the not-allied lists.
+
 ## State tools
 
 | Tool | Status | Notes |
@@ -126,7 +148,7 @@ Both tools were fixed on 1 October 2026. Before that they chose "latest" by load
 
 ## Summaries (unverified)
 
-`get_activity_summary`, `get_exploration_summary`, `get_trading_summary`, `get_combat_summary`, `get_mining_summary`, `get_mission_summary`, `get_engineering_summary`, `get_journey_summary`, `get_performance_metrics`, `get_faction_standings`.
+`get_activity_summary`, `get_exploration_summary`, `get_trading_summary`, `get_combat_summary`, `get_mining_summary`, `get_mission_summary`, `get_engineering_summary`, `get_journey_summary`, `get_performance_metrics`, `get_faction_standings` (always returns empty reputation: it reads the superpower `Reputation` event in the wrong shape and never reads minor factions; use `get_faction_reputation`).
 
 All take `time_range_hours` except faction standings. They cover only what the server has loaded, so a 30 day range does not return 30 days. Verify any figure before stating it.
 

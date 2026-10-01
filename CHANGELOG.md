@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/utils/trade_dangerous.py` and bridge script `scripts/td_bridge.py`;
   configured with `ELITE_TD_PYTHON` and `ELITE_TD_DATA`. Trade Dangerous is
   not a dependency of the server and is never imported by it.
+- `get_wmm_stack`: the active wing mining mission stack, rebuilt from the
+  journal files: tons required, delivered and remaining per mission, totals
+  per commodity, count toward the 20-mission limit, earliest expiry with a
+  48 hour alert, a hauling plan and the next board refresh. Missions that
+  break the PTN rules are flagged. New module `src/utils/wmm.py`.
+- `get_faction_reputation`: reputation with each minor faction from the last
+  visit to a system, read from `Factions[].MyReputation`. Defaults to Mbutas
+  and Paemara.
 - `get_ship_status` now reports landing pad size, jump range, cargo and fuel
   capacity, every module with its engineering, and capability flags such as
   `can_laser_mine`. New module `src/utils/inventory.py`.

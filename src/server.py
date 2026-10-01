@@ -792,6 +792,44 @@ class EliteDangerousServer:
                 routes=routes
             )
 
+        # ==================== Wing Mining Missions and Reputation ====================
+
+        @self.app.tool()
+        async def get_wmm_stack(cargo_capacity: int = 0) -> Dict[str, Any]:
+            """
+            Show the commander's active wing mining mission (WMM) stack.
+
+            Answers "how's my stack?". Rebuilt from the journal files on every
+            call: each active cargo mission with faction, station, commodity,
+            tons required, delivered and remaining, reward, expiry and wing
+            flag; totals per commodity; the count toward the 20-mission limit;
+            the earliest expiry with a 48 hour alert; a hauling plan; and the
+            next mission board refresh. Missions that break the PTN rules
+            (Bromellite, Indium, source and return, not wing, wrong station)
+            are flagged and left out of the totals. Reads local files only.
+
+            Args:
+                cargo_capacity: Cargo hold in tonnes for the hauling plan.
+                           0 = the journal ship's capacity.
+            """
+            return await self.mcp_tools.get_wmm_stack(cargo_capacity=cargo_capacity)
+
+        @self.app.tool()
+        async def get_faction_reputation(systems: str = "") -> Dict[str, Any]:
+            """
+            Show the commander's reputation with each minor faction in a system.
+
+            Reads the value the game recorded on the last visit to each system
+            (jump in, carrier jump or login), with standing, whether it is
+            Allied, and which factions are not yet Allied or not yet at 100.
+            Reads local files only.
+
+            Args:
+                systems: Comma-separated system names. Empty = Mbutas and
+                           Paemara, the PTN wing mining systems.
+            """
+            return await self.mcp_tools.get_faction_reputation(systems=systems)
+
         # ==================== Journey and Navigation Tools ====================
         
         @self.app.tool()
