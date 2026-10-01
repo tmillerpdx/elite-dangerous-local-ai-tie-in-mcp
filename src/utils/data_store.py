@@ -170,6 +170,9 @@ class DataStore:
             'ShipyardSwap': self._handle_ship_swap,
             'Status': self._handle_status_update,
             'Location': self._handle_location_update,
+            # Written instead of FSDJump when the commander is aboard a
+            # fleet carrier that jumps. Carries the same fields as Location.
+            'CarrierJump': self._handle_location_update,
             'CargoTransfer': self._handle_cargo_transfer,
             'Statistics': self._handle_statistics_update,
         }

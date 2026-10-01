@@ -117,8 +117,29 @@ class EliteDangerousServer:
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
     
+    # Journal events that place the commander in a star system.
+    LOCATION_EVENT_MARKERS = (
+        '"event":"Location"',
+        '"event":"FSDJump"',
+        '"event":"CarrierJump"',
+    )
+    # Upper bound on how many older journals are scanned to find a location.
+    MAX_LOCATION_LOOKBACK_FILES = 50
+
+    def _journal_has_location(self, file_path: Path) -> bool:
+        """Return True if a journal file contains an event that sets the current system."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    compact = line.replace('": "', '":"')
+                    if any(marker in compact for marker in self.LOCATION_EVENT_MARKERS):
+                        return True
+        except OSError as e:
+            logger.debug(f"Could not scan {file_path.name} for location events: {e}")
+        return False
+
     async def load_historical_data(self, hours_back: int = 24):
-        """Load historical journal data from recent files."""
+        """Load historical journal data from recent files, oldest first."""
         try:
             logger.info(f"Loading historical data from last {hours_back} hours...")
 
@@ -128,15 +149,34 @@ class EliteDangerousServer:
             # Initialize journal parser
             journal_parser = JournalParser(self.config.journal_path)
 
-            # Find recent journal files
+            # find_journal_files() returns newest first. The newest file is
+            # skipped here because the journal monitor replays it on startup;
+            # loading it twice would store each of its events twice.
             all_files = journal_parser.find_journal_files()
+            latest_file = all_files[0] if all_files else None
+            older_files = all_files[1:]
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_back)
 
             recent_files = []
-            for file_path in all_files:
+            for file_path in older_files:
                 file_timestamp = journal_parser._extract_timestamp_from_filename(file_path)
                 if file_timestamp > cutoff_time:
                     recent_files.append(file_path)
+
+            # The commander stays where the last session left them, however
+            # long ago that was. If nothing loaded so far places them in a
+            # system, walk back until a journal with a location event is found.
+            in_window = recent_files + ([latest_file] if latest_file else [])
+            if not any(self._journal_has_location(f) for f in in_window):
+                lookback = older_files[len(recent_files):][:self.MAX_LOCATION_LOOKBACK_FILES]
+                for file_path in lookback:
+                    recent_files.append(file_path)
+                    if self._journal_has_location(file_path):
+                        logger.info(f"Extended history to {file_path.name} to find current location")
+                        break
+
+            # Replay oldest first so newer state overwrites older state.
+            recent_files.reverse()
 
             logger.info(f"Found {len(recent_files)} recent journal files to process")
 

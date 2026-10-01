@@ -7,7 +7,7 @@ with robust error handling and performance optimization.
 import glob
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -353,20 +353,21 @@ class JournalParser:
             match_iso = re.search(r'Journal\.(\d{4}-\d{2}-\d{2}T\d{6})\.', filename)
             if match_iso:
                 timestamp_str = match_iso.group(1)
-                return datetime.strptime(timestamp_str, "%Y-%m-%dT%H%M%S")
+                # The game names journals in local time; normalise to aware UTC.
+                return datetime.strptime(timestamp_str, "%Y-%m-%dT%H%M%S").astimezone(timezone.utc)
 
             # Try legacy compact format without dashes: Journal.YYYYMMDDHHMMSS.NN.log
             match_legacy = re.search(r'Journal\.(\d{14})\.', filename)
             if match_legacy:
                 legacy_str = match_legacy.group(1)
-                return datetime.strptime(legacy_str, "%Y%m%d%H%M%S")
+                return datetime.strptime(legacy_str, "%Y%m%d%H%M%S").astimezone(timezone.utc)
 
             logger.warning(f"Could not extract timestamp from filename: {filename}")
-            return datetime.fromtimestamp(0)  # Epoch as fallback
+            return datetime.fromtimestamp(0, timezone.utc)  # Epoch as fallback
 
         except Exception as e:
             logger.warning(f"Error parsing timestamp from {file_path.name}: {e}")
-            return datetime.fromtimestamp(0)  # Epoch as fallback
+            return datetime.fromtimestamp(0, timezone.utc)  # Epoch as fallback
     
     def get_file_info(self, file_path: Path) -> Dict:
         """
