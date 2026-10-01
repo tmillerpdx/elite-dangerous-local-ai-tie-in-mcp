@@ -6,6 +6,7 @@ between Elite Dangerous, Claude Desktop, and EDCoPilot.
 """
 
 import asyncio
+import functools
 import logging
 import sys
 import signal
@@ -93,6 +94,8 @@ class EliteDangerousServer:
         
         # Initialize MCP server
         self.app = FastMCP("Elite Dangerous MCP Server")
+        # Every tool registered on the app catches up on the journal before it runs.
+        self._install_tool_catch_up()
         
         # Initialize components
         self.journal_monitor: Optional[JournalMonitor] = None
@@ -235,7 +238,8 @@ class EliteDangerousServer:
             # Initialize journal monitor with required parameters
             self.journal_monitor = JournalMonitor(
                 journal_path=self.config.journal_path,
-                event_callback=on_journal_event
+                event_callback=on_journal_event,
+                poll_interval=self._journal_poll_interval()
             )
             
             # Start monitoring
@@ -249,6 +253,49 @@ class EliteDangerousServer:
             logger.error(f"Failed to start journal monitoring: {e}")
             raise
     
+    def _journal_poll_interval(self) -> float:
+        """Seconds between journal polls, from config, defaulting to one second."""
+        try:
+            interval = float(getattr(self.config, "file_check_interval", 1.0))
+        except (TypeError, ValueError):
+            interval = 1.0
+        return interval if interval > 0 else 1.0
+
+    async def catch_up_journal(self) -> None:
+        """
+        Read anything the game has written since the last poll.
+
+        Called before every tool runs, so an answer never lags the journal by
+        even one poll interval, and a stalled background poll cannot leave the
+        server blind.
+        """
+        monitor = self.journal_monitor
+        if monitor is None:
+            return
+        try:
+            await monitor.poll_once()
+        except Exception as e:
+            logger.error(f"Error catching up on the journal before a tool call: {e}")
+
+    def _install_tool_catch_up(self) -> None:
+        """Make every tool registered from here on catch up on the journal first."""
+        register_tool = self.app.tool
+
+        def tool_with_catch_up(*args, **kwargs):
+            register = register_tool(*args, **kwargs)
+
+            def decorator(fn):
+                @functools.wraps(fn)
+                async def wrapper(*fn_args, **fn_kwargs):
+                    await self.catch_up_journal()
+                    return await fn(*fn_args, **fn_kwargs)
+
+                return register(wrapper)
+
+            return decorator
+
+        self.app.tool = tool_with_catch_up
+
     async def stop_journal_monitoring(self):
         """Stop journal monitoring gracefully."""
         if self.journal_monitor:
