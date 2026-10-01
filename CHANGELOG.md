@@ -13,6 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `find_exobiology_targets` (landable bodies with biological signals).
   Both default to the commander's current system. New module
   `src/utils/spansh_client.py`; new dependency `httpx`.
+- `find_material_bodies`: nearest or richest landable bodies carrying one or
+  more raw engineering materials, via Spansh. Reports surface share,
+  gravity, volcanism and geological signal count.
+- `find_commodity_market`: nearest or best-priced stations to buy or sell a
+  commodity, via the Spansh station search. Filters on stock or demand, pad
+  size, data age and arrival distance; leaves out fleet carriers by default;
+  corrects capitalisation and suggests names for misspellings.
+- `plot_neutron_route`: neutron-highway route to a destination, via the
+  Spansh route plotters. Starts from the current system and reads the ship
+  from the journal `Loadout`, so fuel is modelled for every jump and refuel
+  stops are marked. Falls back to the plain neutron plotter with a jump
+  range when the drive is not recognised or `jump_range_ly` is given.
+- `plan_trade_route`: most profitable multi-stop trade run, planned by a
+  separately installed Trade Dangerous (https://github.com/eyeonus/Trade-Dangerous).
+  Starts from the current station and reads credits, cargo capacity, laden
+  jump range and pad size from the journal. New module
+  `src/utils/trade_dangerous.py` and bridge script `scripts/td_bridge.py`;
+  configured with `ELITE_TD_PYTHON` and `ELITE_TD_DATA`. Trade Dangerous is
+  not a dependency of the server and is never imported by it.
+- `get_ship_status` now reports landing pad size, jump range, cargo and fuel
+  capacity, every module with its engineering, and capability flags such as
+  `can_laser_mine`. New module `src/utils/inventory.py`.
+- Companion skill for AI clients in `skills/elite-dangerous-companion/`.
 - Initial project structure and configuration
 - Basic MCP server framework setup
 - Journal monitoring system foundation
@@ -26,6 +49,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   history load; history files were replayed newest-first; and `CarrierJump` had
   no game-state handler. Startup now also looks back past the 24 hour window
   until it finds a journal that places the commander in a system.
+- Game state from the Status file: flags are now read from the event itself
+  (they were always zero, so every Status update cleared docked, landed and
+  supercruise), bit positions above bit 4 now match the journal manual, and an
+  empty Status file no longer overwrites journal state.
+- Coordinates are now read from `StarPos`; they were always empty.
+- `Docked` now updates the current system.
+- The Spansh client retries once on a 502, 503 or 504.
+- A historical search no longer changes the current game state. It used to
+  replay old events through live state and move the commander back in time.
+- `get_material_inventory` and `get_ship_status` now pick the newest snapshot
+  by timestamp, not by load order, so a historical search cannot make them
+  report a weeks-old inventory or ship.
+- `get_material_inventory` now applies pickups, trades, engineering, synthesis,
+  broker purchases and mission rewards made after the login snapshot.
+- `get_ship_status` module list was always empty.
 
 ### Changed
 - N/A

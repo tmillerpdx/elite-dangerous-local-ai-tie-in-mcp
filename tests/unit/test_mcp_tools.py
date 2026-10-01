@@ -735,10 +735,12 @@ class TestMCPTools:
         
         assert "Gold" in result["cargo"]
         assert result["cargo"]["Gold"]["count"] == 10
-        assert "Iron" in result["materials"]["raw"]
-        assert result["materials"]["raw"]["Iron"] == 50
-        assert "Shield Emitters" in result["materials"]["manufactured"]
-        assert "Shield Data" in result["materials"]["encoded"]
+        # Material ids are normalised to lower case, the form the journal uses,
+        # so snapshot entries and later change events share one key.
+        assert "iron" in result["materials"]["raw"]
+        assert result["materials"]["raw"]["iron"] == 50
+        assert "shield emitters" in result["materials"]["manufactured"]
+        assert "shield data" in result["materials"]["encoded"]
     
     # ==================== Error Handling Tests ====================
     

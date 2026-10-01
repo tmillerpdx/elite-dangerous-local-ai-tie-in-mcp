@@ -177,3 +177,5 @@ logs/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
+# skill eval workspaces
+skills/*-workspace/

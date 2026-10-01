@@ -1,0 +1,63 @@
+{
+  "skill_name": "elite-dangerous-companion",
+  "evals": [
+    {
+      "id": 0,
+      "name": "buy-tritium-large-ship",
+      "prompt": "where can i buy tritium nearby? im hauling in my type-9 so needs a big pad, want at least 500t",
+      "expected_output": "Recommends one large-pad station with fresh data and enough stock, shows alternatives in a table with data age, states the system searched from.",
+      "files": [],
+      "assertions": [
+        "Uses find_commodity_market to find Tritium sellers",
+        "Leads with one recommended station before any table",
+        "Every station offered has a large pad and at least 500 units in stock",
+        "Shows how old the market data is for each station",
+        "States which system the search was centred on (Hollatja)",
+        "Does not recommend a fleet carrier with stale data"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "materials-have-and-need",
+      "prompt": "how much selenium and cadmium do i have right now, and where should i go to get more? need them for G5 dirty drives",
+      "expected_output": "Does not present the server's inventory figures as fact (verifies against the journal or flags them as unreliable). Recommends a body carrying both materials, with gravity and arrival distance.",
+      "files": [],
+      "assertions": [
+        "Does not state the server's inventory counts as fact (ground truth: 0 Selenium, 0 Cadmium)",
+        "Reports the correct holdings (0 and 0) or says plainly that the server's figure is unreliable",
+        "Uses find_material_bodies to locate sources",
+        "Recommends at least one body carrying both Selenium and Cadmium",
+        "Gives gravity and distance from the arrival star for the recommended body",
+        "States which system the search was centred on (Hollatja)"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "trading-earnings",
+      "prompt": "how much did i make from trading in my last session? give me the number",
+      "expected_output": "Gives a figure that is either verified against journal events or explicitly flagged as unverified. Does not quote a summary tool blindly.",
+      "files": [],
+      "assertions": [
+        "Does not quote a summary tool figure without verifying it or flagging it as unverified",
+        "Recognises that the most recent sessions contain no trading",
+        "Gives the last trading session's figures correctly (sold 111.5M, bought 8.8M, net about 102.7M) or explicitly says the figure could not be verified",
+        "Leads with the number, as asked"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "exobio-and-mining-plan",
+      "prompt": "i want to do some exobiology and maybe laser mine some platinum after. whats a good plan from where i am",
+      "expected_output": "Combines exobiology and mining searches, prefers systems serving both, names catches such as depleted reserves or gravity, states the reference system, offers but does not force a saved plan.",
+      "files": [],
+      "assertions": [
+        "Calls both find_exobiology_targets and find_mining_hotspots",
+        "States which system the search was centred on (Hollatja)",
+        "Leads with a recommended plan, not a list of options",
+        "Names at least one catch (reserve level, gravity, arrival distance, or data limits)",
+        "Notes that Platinum is laser mined or otherwise confirms the mining method fits",
+        "Does not build an artifact or chart unasked; at most offers one"
+      ]
+    }
+  ]
+}
