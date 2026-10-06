@@ -28,6 +28,8 @@ Read `references/tools.md` when you need the full tool list, parameters, or the 
 | What's my rep in Mbutas or Paemara? Who am I not Allied with? | `get_faction_reputation` | State `age_days`; the value only updates on a visit. |
 | How do I get to a far-off system? | `plot_neutron_route` | Reads the ship from the journal and models fuel per jump. Slow: up to two minutes. Summarise long routes. |
 | What did I just do? | `get_recent_events` or `search_events` | Raw events. Trusted as a record of what happened. |
+| Anything over time: net worth, past sales, when I last visited X | `search_journal_history` | Trusted. Every journal ever written, original events. Pass `fields` for a series. |
+| What is in my hold? What does this station sell? What route is plotted? | `get_live_file` | Trusted. `Cargo`, `Market`, `NavRoute` and others. Check `age_seconds`. |
 | How did the session go? Earnings? | A summary tool, then verify | See "Unverified numbers" below. |
 | What should I do next? | Combine the above | See "Giving advice". |
 
@@ -44,7 +46,7 @@ Flagging the date is not enough on its own. A caveat under a table of stations i
 
 ## Trust
 
-**Trusted** - built or fixed and tested against real journals: `get_current_location`, `get_ship_status`, `get_material_inventory`, the four `find_*` tools, `server_status`, `get_recent_events`, `search_events`.
+**Trusted** - built or fixed and tested against real journals: `get_current_location`, `get_ship_status`, `get_material_inventory`, `search_journal_history`, `get_live_file`, the four `find_*` tools, `server_status`, `get_recent_events`, `search_events`.
 
 `get_ship_status` gives the ship, its landing pad size, jump range, cargo and fuel capacity, rebuy, every module with its engineering, and capability flags such as `can_laser_mine`, `fuel_scoop` and `srv_bay`. Call it before advice that depends on the ship: pad size for a market, mining gear for a mining trip, an SRV for surface prospecting.
 
@@ -52,8 +54,12 @@ Flagging the date is not enough on its own. A caveat under a table of stations i
 
 **Unverified** - upstream code nobody has checked: the activity summaries (`get_trading_summary`, `get_exploration_summary`, `get_mining_summary`, `get_combat_summary`, `get_mission_summary`, `get_engineering_summary`, `get_journey_summary`, `get_performance_metrics`, `get_faction_standings`).
 
+`search_journal_history` reads every journal file directly and returns each event exactly as the game wrote it. Filter with `event_types`, `start_date` and `end_date` (ISO or "7 days ago"), and `contains_text`. A broad search is capped and says so in `note`; narrow it or pass `fields`.
+
+`get_live_file` reads the files the game rewrites in place. Call it with no name to list them. `Market`, `Outfitting` and `Shipyard` describe the last station where the commander opened that screen, which may be hours and many jumps ago: read the station name inside and `age_seconds` before using them. For a large file pass `item_filter`, for example `filename="Market", item_filter="tritium"`.
+
 **Limited** - usable, with a known gap:
-- `search_historical_events` returns some event types with empty contents, including the ones that hold wealth and inventory, so it cannot supply figures such as net worth over time. It works for trade events.
+- `search_historical_events` returns some event types with empty contents, including the ones that hold wealth and inventory. Use `search_journal_history` instead; it returns the original events and does not touch the server's state.
 
 **Sanity check for a stale server.** The inventory and ship tools were once caught reporting a weeks-old ship with a 342 credit rebuy. If `loadout_timestamp` or `snapshot_timestamp` is far older than the commander's last session, or `get_ship_status` returns no modules, the server is running old code and needs a restart. Say so instead of using the figures.
 
@@ -61,7 +67,7 @@ Flagging the date is not enough on its own. A caveat under a table of stations i
 
 ### Unverified numbers
 
-When a summary tool gives you a figure the commander will act on or quote - credits earned, profit per hour, tons mined - check it before stating it. Pull the underlying events with `search_events` and see whether they support the figure. If you can read files (Claude Code), the journals themselves are the ground truth: `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous\Journal.*.log`, one JSON event per line.
+When a summary tool gives you a figure the commander will act on or quote - credits earned, profit per hour, tons mined - check it before stating it. Pull the underlying events with `search_journal_history` (for example `event_types=["MarketSell", "MarketBuy"]` over the session's dates, with `fields=["TotalSale"]` or `["TotalCost"]`) and add them up yourself. That works from any client, with or without file access.
 
 If you cannot verify a figure, say so in the same sentence: "The server reports 412M earned, which I couldn't confirm." An unverified number stated plainly has already cost this commander one wrong answer.
 
@@ -113,7 +119,7 @@ Most answers are a table in chat. Reach for more only when it helps:
 
 For anything else, offer the visual in one line at the end and let them choose. A chart nobody asked for costs them time while they are flying.
 
-Charts need trustworthy numbers. Trends over long periods have to come from the journal files, because the historical search tool returns empty events. If you cannot read the files, say that a chart of that history is not available from this session, and why.
+Charts need trustworthy numbers, and `search_journal_history` supplies them from any client. Net worth over time is `event_types=["Statistics"]`, `fields=["Bank_Account.Current_Wealth"]`, `sort_order="asc"`, `limit=5000`: one point per login, about 20 KB for three years. Always pass `fields` for a series; whole events are several kilobytes each. The game writes that figure at login, so a day's earnings show on the next session's point.
 
 ## When something looks wrong
 

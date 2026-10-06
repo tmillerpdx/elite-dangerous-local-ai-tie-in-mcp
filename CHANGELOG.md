@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capacity, every module with its engineering, and capability flags such as
   `can_laser_mine`. New module `src/utils/inventory.py`.
 - Companion skill for AI clients in `skills/elite-dangerous-companion/`.
+- `search_journal_history`: search every journal file and get the original
+  events back, filtered by type, date and text, with an optional `fields`
+  projection for building series. Reads the files directly and never touches
+  the in-memory event store. New module `src/utils/raw_journal.py`.
+- `get_live_file`: list or read the state files the game rewrites in place
+  (Cargo, Market, NavRoute, Outfitting, Shipyard and others), with an item
+  filter for the large ones.
 - Initial project structure and configuration
 - Basic MCP server framework setup
 - Journal monitoring system foundation

@@ -15,6 +15,10 @@ try:
     from ..utils.data_store import EventFilter, QuerySortOrder, GameState
     from ..utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
     from ..utils.trade_dangerous import TradeDangerousClient
+    from ..utils.raw_journal import (
+        list_live_files, read_live_file,
+        search_journal_history as search_raw_journal_history
+    )
     from ..utils.wmm import (
         REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS, build_wmm_stack,
         faction_reputation, read_recent_journal_events
@@ -27,6 +31,10 @@ except ImportError:
     from src.utils.data_store import EventFilter, QuerySortOrder, GameState
     from src.utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
     from src.utils.trade_dangerous import TradeDangerousClient
+    from src.utils.raw_journal import (
+        list_live_files, read_live_file,
+        search_journal_history as search_raw_journal_history
+    )
     from src.utils.wmm import (
         REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS, build_wmm_stack,
         faction_reputation, read_recent_journal_events
@@ -229,6 +237,83 @@ class MCPTools:
             return result
         except Exception as e:
             logger.error(f"Error finding material bodies: {e}")
+            return {"error": str(e)}
+
+    # ==================== Raw Journal Access ====================
+
+    def _journal_folder(self) -> Dict[str, Any]:
+        """Return {"path": folder} or a structured error object."""
+        folder = getattr(self.data_store, "journal_path", None)
+        if not folder:
+            return {"error": "The server has no journal folder configured."}
+        return {"path": folder}
+
+    async def search_journal_history(
+        self,
+        event_types: Optional[List[str]] = None,
+        start_date: str = "",
+        end_date: str = "",
+        contains_text: str = "",
+        fields: Optional[List[str]] = None,
+        limit: int = 200,
+        sort_order: str = "desc"
+    ) -> Dict[str, Any]:
+        """
+        Search every journal file and return the original events.
+
+        Reads the files directly. Nothing is loaded into the event store, so
+        the current game state cannot be disturbed.
+
+        Args:
+            event_types: Event names to keep; None or empty keeps all
+            start_date: Start of range, ISO or natural language; empty for no start
+            end_date: End of range; empty for no end
+            contains_text: Keep events whose JSON contains this text
+            fields: Dotted paths to return instead of whole events
+            limit: Most events to return
+            sort_order: "desc" or "asc"; empty string selects desc
+
+        Returns:
+            Dict with events and counts, or a structured error object
+        """
+        try:
+            folder = self._journal_folder()
+            if "error" in folder:
+                return folder
+            return search_raw_journal_history(
+                folder["path"],
+                event_types=event_types or None,
+                start_date=start_date or None,
+                end_date=end_date or None,
+                contains_text=contains_text or None,
+                fields=fields or None,
+                limit=limit,
+                sort_order=sort_order or "desc"
+            )
+        except Exception as e:
+            logger.error(f"Error searching journal history: {e}")
+            return {"error": str(e)}
+
+    async def get_live_file(self, filename: str = "", item_filter: str = "") -> Dict[str, Any]:
+        """
+        Read one of the game's live state files, or list them.
+
+        Args:
+            filename: File name with or without ".json"; empty string lists the files
+            item_filter: Keep only entries of the file's main list containing this text
+
+        Returns:
+            Dict with the file's data and age, a listing, or a structured error object
+        """
+        try:
+            folder = self._journal_folder()
+            if "error" in folder:
+                return folder
+            if not (filename or "").strip():
+                return list_live_files(folder["path"])
+            return read_live_file(folder["path"], filename, item_filter or "")
+        except Exception as e:
+            logger.error(f"Error reading live file: {e}")
             return {"error": str(e)}
 
     async def find_commodity_market(

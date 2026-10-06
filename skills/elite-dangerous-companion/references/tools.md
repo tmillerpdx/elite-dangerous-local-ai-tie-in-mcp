@@ -146,6 +146,51 @@ Both tools were fixed on 1 October 2026. Before that they chose "latest" by load
 | `search_events` | Trusted | Filter by type, category, time, system, text. Covers what the server has loaded: roughly the last day, plus the last session if older. |
 | `search_historical_events` | Use with care | Searches all history. Common events such as `MarketSell` come back with usable `key_data`; others, such as `Statistics` and `Materials`, come back empty, so check before relying on it for figures. On server builds from before 1 October 2026 a historical search also overwrote the live location with the old events' location. If the location looks stale after one, the server needs a restart. |
 
+## Raw journal access (trusted)
+
+Both read files directly and never change the server's state.
+
+### search_journal_history
+Every event from every journal file, as the original JSON.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `event_types` | all | List of journal event names, any capitalisation. |
+| `start_date`, `end_date` | none | Inclusive. ISO date or natural language ("yesterday", "30 days ago"). |
+| `contains_text` | none | Keep events whose JSON contains this text. |
+| `fields` | whole event | Dotted paths, e.g. `Bank_Account.Current_Wealth`, `Modules.0.Item`. Results then hold `timestamp`, `event` and those values. |
+| `limit` | 200 | Max 5000. |
+| `sort_order` | `desc` | `asc` for oldest first. |
+
+Returns `events`, `returned_count`, `matched_count`, `truncated`, `files_scanned`, `date_range`, and a `note` when the result was cut short. A result stops growing at about 300,000 characters.
+
+Useful recipes:
+- Net worth series: `event_types=["Statistics"]`, `fields=["Bank_Account.Current_Wealth"]`, `sort_order="asc"`, `limit=5000`.
+- Sales of one commodity: `event_types=["MarketSell"]`, `contains_text="wine"`, `fields=["Count", "TotalSale"]`.
+- Systems visited in a period: `event_types=["FSDJump", "CarrierJump"]`, `fields=["StarSystem", "JumpDist"]`.
+- A past ship fit: `event_types=["Loadout"]`, `end_date=<date>`, `limit=1`.
+- Exobiology income: `event_types=["SellOrganicData"]`.
+
+### get_live_file
+The state files the game rewrites in place.
+
+Parameters: `filename` (with or without `.json`; empty lists the files), `item_filter` (keep entries of the file's main list containing this text).
+
+Returns `filename`, `modified_at`, `age_seconds`, `data`, and `items_matched` / `items_total` when filtered.
+
+| File | Holds | Updated when |
+|---|---|---|
+| `Status` | Flags, fuel, pips, cargo mass, balance | Every second or so in game |
+| `Cargo` | Hold contents | Cargo changes |
+| `NavRoute` | Plotted route, each stop with coordinates and star class | A route is plotted or cleared |
+| `Market` | Every commodity at one station with prices, stock, demand | The commander opens the market screen |
+| `Outfitting`, `Shipyard` | What one station sells | The commander opens that screen |
+| `ModulesInfo` | Fitted modules with power use | Loadout changes |
+| `ShipLocker`, `Backpack` | On-foot items | They change |
+| `FCMaterials` | Fleet carrier bartender stock | The commander opens it |
+
+`Market`, `Outfitting` and `Shipyard` can be a long way out of date and for a different station than the one the commander is at. Read the `StationName` inside.
+
 ## Summaries (unverified)
 
 `get_activity_summary`, `get_exploration_summary`, `get_trading_summary`, `get_combat_summary`, `get_mining_summary`, `get_mission_summary`, `get_engineering_summary`, `get_journey_summary`, `get_performance_metrics`, `get_faction_standings` (always returns empty reputation: it reads the superpower `Reputation` event in the wrong shape and never reads minor factions; use `get_faction_reputation`).
