@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Configurable EDCoPilot themes directory. New setting `edcopilot_themes_path`
+  (environment variable `ELITE_EDCOPILOT_THEMES_PATH`) and headless CLI flag
+  `--edcopilot-themes-path`. When the specified directory is empty it is seeded
+  with a copy of the bundled `edcopilot_themes` contents; when unset, the bundled
+  directory is used as before. The MCP theme tools and the CLI now honour it.
 - Nearby search tools backed by the public Spansh body search:
   `find_mining_hotspots` (ring hotspots for a commodity) and
   `find_exobiology_targets` (landable bodies with biological signals).
