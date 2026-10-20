@@ -15,6 +15,10 @@ try:
     from ..utils.data_store import EventFilter, QuerySortOrder, GameState
     from ..utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
     from ..utils.trade_dangerous import TradeDangerousClient
+    from ..utils.raw_journal import (
+        list_live_files, read_live_file,
+        search_journal_history as search_raw_journal_history
+    )
     from ..utils.wmm import (
         REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS, build_wmm_stack,
         faction_reputation, read_recent_journal_events
@@ -27,6 +31,10 @@ except ImportError:
     from src.utils.data_store import EventFilter, QuerySortOrder, GameState
     from src.utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
     from src.utils.trade_dangerous import TradeDangerousClient
+    from src.utils.raw_journal import (
+        list_live_files, read_live_file,
+        search_journal_history as search_raw_journal_history
+    )
     from src.utils.wmm import (
         REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS, build_wmm_stack,
         faction_reputation, read_recent_journal_events
@@ -229,6 +237,83 @@ class MCPTools:
             return result
         except Exception as e:
             logger.error(f"Error finding material bodies: {e}")
+            return {"error": str(e)}
+
+    # ==================== Raw Journal Access ====================
+
+    def _journal_folder(self) -> Dict[str, Any]:
+        """Return {"path": folder} or a structured error object."""
+        folder = getattr(self.data_store, "journal_path", None)
+        if not folder:
+            return {"error": "The server has no journal folder configured."}
+        return {"path": folder}
+
+    async def search_journal_history(
+        self,
+        event_types: Optional[List[str]] = None,
+        start_date: str = "",
+        end_date: str = "",
+        contains_text: str = "",
+        fields: Optional[List[str]] = None,
+        limit: int = 200,
+        sort_order: str = "desc"
+    ) -> Dict[str, Any]:
+        """
+        Search every journal file and return the original events.
+
+        Reads the files directly. Nothing is loaded into the event store, so
+        the current game state cannot be disturbed.
+
+        Args:
+            event_types: Event names to keep; None or empty keeps all
+            start_date: Start of range, ISO or natural language; empty for no start
+            end_date: End of range; empty for no end
+            contains_text: Keep events whose JSON contains this text
+            fields: Dotted paths to return instead of whole events
+            limit: Most events to return
+            sort_order: "desc" or "asc"; empty string selects desc
+
+        Returns:
+            Dict with events and counts, or a structured error object
+        """
+        try:
+            folder = self._journal_folder()
+            if "error" in folder:
+                return folder
+            return search_raw_journal_history(
+                folder["path"],
+                event_types=event_types or None,
+                start_date=start_date or None,
+                end_date=end_date or None,
+                contains_text=contains_text or None,
+                fields=fields or None,
+                limit=limit,
+                sort_order=sort_order or "desc"
+            )
+        except Exception as e:
+            logger.error(f"Error searching journal history: {e}")
+            return {"error": str(e)}
+
+    async def get_live_file(self, filename: str = "", item_filter: str = "") -> Dict[str, Any]:
+        """
+        Read one of the game's live state files, or list them.
+
+        Args:
+            filename: File name with or without ".json"; empty string lists the files
+            item_filter: Keep only entries of the file's main list containing this text
+
+        Returns:
+            Dict with the file's data and age, a listing, or a structured error object
+        """
+        try:
+            folder = self._journal_folder()
+            if "error" in folder:
+                return folder
+            if not (filename or "").strip():
+                return list_live_files(folder["path"])
+            return read_live_file(folder["path"], filename, item_filter or "")
+        except Exception as e:
+            logger.error(f"Error reading live file: {e}")
             return {"error": str(e)}
 
     async def find_commodity_market(
@@ -523,12 +608,15 @@ class MCPTools:
             result = build_wmm_stack(events, datetime.now(timezone.utc), capacity)
             result["notes"] = [
                 "Rebuilt from the last %d days of journal files." % self.WMM_STACK_LOOKBACK_DAYS,
-                "Flags: wrong_commodity (not Gold, Silver, Bertrandite or Indite), "
+                "Flags: wrong_commodity (not Gold, Silver, Bertrandite, Indite or Gallite), "
                 "source_and_return, not_wing, unsupported_station (not Burkin Orbital, "
-                "Darlton Port or Rukavishnikov Terminal), details_unknown (the mission is "
+                "Darlton Port, Rukavishnikov Terminal, Bismarck Legacy or Sei Point), "
+                "details_unknown (the mission is "
                 "active but its acceptance is not in the journals read, for example one "
                 "shared by a wingmate).",
                 "Flagged missions are left out of the totals and the hauling plan.",
+                "totals_by_station splits the good missions by the station they were "
+                "taken at, for sharing per station.",
             ]
             return result
         except Exception as e:
@@ -567,7 +655,7 @@ class MCPTools:
             game_state = self.data_store.get_game_state()
             
             # Get recent location events for additional context
-            location_events = self.data_store.get_events_by_type("Location", limit=1)
+            location_events = self.data_store.get_events_by_type("Location")
             recent_jumps = self.data_store.get_events_by_type("FSDJump", limit=5)
             
             response = {
@@ -590,16 +678,31 @@ class MCPTools:
                 }
                 response["recent_systems"].append(system_info)
             
-            # Add additional location context if available
-            if location_events:
-                latest = location_events[-1]
-                response["location_timestamp"] = latest.timestamp.isoformat()
-                response["population"] = latest.raw_event.get("Population", 0)
-                response["allegiance"] = latest.raw_event.get("Allegiance")
-                response["economy"] = latest.raw_event.get("Economy")
-                response["government"] = latest.raw_event.get("Government")
-                response["security"] = latest.raw_event.get("Security")
-            
+            # location_timestamp is when the journal last placed the commander:
+            # the newest of any event that does so, not only Location. Clients
+            # use it to judge whether the server is stale.
+            placing_events = list(location_events)
+            for event_type in ("FSDJump", "CarrierJump", "Docked"):
+                placing_events.extend(self.data_store.get_events_by_type(event_type))
+            newest_placing = latest_by_timestamp(placing_events)
+            if newest_placing is not None:
+                response["location_timestamp"] = newest_placing.timestamp.isoformat()
+                response["location_event"] = newest_placing.event_type
+
+            # System details come from the newest event that describes a system.
+            system_events = [e for e in placing_events if e.event_type != "Docked"]
+            latest = latest_by_timestamp(system_events)
+            if latest is not None:
+                raw = latest.raw_event or {}
+                response["population"] = raw.get("Population", 0)
+                response["allegiance"] = raw.get("SystemAllegiance") or raw.get("Allegiance")
+                response["economy"] = (raw.get("SystemEconomy_Localised")
+                                       or raw.get("SystemEconomy") or raw.get("Economy"))
+                response["government"] = (raw.get("SystemGovernment_Localised")
+                                          or raw.get("SystemGovernment") or raw.get("Government"))
+                response["security"] = (raw.get("SystemSecurity_Localised")
+                                        or raw.get("SystemSecurity") or raw.get("Security"))
+
             return response
             
         except Exception as e:
@@ -1276,14 +1379,18 @@ class MCPTools:
             "missions_failed": 0,
             "missions_abandoned": 0,
             "total_rewards": 0,
+            "total_donated": 0,
             "factions_worked_for": set(),
             "active_missions": [],
             "completed_missions": []
         }
         
         active_missions = {}
-        
-        for event in events:
+
+        # Walk oldest first. The query returns newest first, and in that order
+        # a completion is seen before its acceptance, which left every
+        # finished mission listed as still active.
+        for event in sorted(events, key=lambda e: e.timestamp):
             if event.event_type == "MissionAccepted":
                 summary["missions_accepted"] += 1
                 mission_id = event.raw_event.get("MissionID")
@@ -1303,8 +1410,14 @@ class MCPTools:
                     
             elif event.event_type == "MissionCompleted":
                 summary["missions_completed"] += 1
-                summary["total_rewards"] += event.key_data.get("reward", 0)
-                
+                # Donation missions carry no Reward, and key_data may hold an
+                # explicit None; either must count as zero, not crash the sum.
+                reward = event.key_data.get("reward")
+                if reward is None:
+                    reward = event.raw_event.get("Reward")
+                summary["total_rewards"] += int(reward or 0)
+                summary["total_donated"] += int(event.raw_event.get("Donated") or 0)
+
                 mission_id = event.raw_event.get("MissionID")
                 if mission_id and mission_id in active_missions:
                     mission_info = active_missions.pop(mission_id)

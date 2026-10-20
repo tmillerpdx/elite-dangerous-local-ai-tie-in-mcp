@@ -684,7 +684,10 @@ class TestJournalParserEdgeCases:
         
         entries3, pos3 = parser.read_journal_file_incremental(incremental_journal, pos1)
         assert len(entries3) == 0
-        assert pos3 == pos1  # Position shouldn't change
+        # A file shorter than the tracked position has been replaced. Tracking
+        # restarts from the top; keeping the old position would silently skip
+        # everything written until the file grew past it again.
+        assert pos3 == 0
         
         # Test with file that's been deleted
         incremental_journal.unlink()

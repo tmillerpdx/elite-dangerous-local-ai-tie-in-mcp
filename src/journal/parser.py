@@ -276,8 +276,33 @@ class JournalParser:
             # read() will return empty string and we'll get 0 entries, which is correct.
             # This is a cheap operation and eliminates the race condition entirely.
 
-            # Read only new content
-            new_entries, new_position = self.read_journal_file(file_path, last_position)
+            # Read bytes, not text, so the position is an exact byte offset,
+            # and take only complete lines. The game may be half way through
+            # writing a line; consuming it now would parse as garbage and the
+            # event would be skipped for good.
+            with open(file_path, 'rb') as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if last_position > size:
+                    # File is shorter than where we were: it was replaced.
+                    last_position = 0
+                if size == last_position:
+                    return [], last_position
+                f.seek(last_position)
+                chunk = f.read()
+
+            end = chunk.rfind(b'\n')
+            if end < 0:
+                return [], last_position
+            complete = chunk[:end + 1]
+
+            new_entries = []
+            for line in complete.decode(self.encoding, errors='replace').splitlines():
+                entry = self.parse_journal_entry(line)
+                if entry:
+                    new_entries.append(entry)
+
+            new_position = last_position + len(complete)
 
             if new_entries:
                 logger.debug(f"Read {len(new_entries)} new entries from {file_path.name}")

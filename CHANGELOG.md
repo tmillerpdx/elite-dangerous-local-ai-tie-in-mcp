@@ -37,13 +37,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per commodity, count toward the 20-mission limit, earliest expiry with a
   48 hour alert, a hauling plan and the next board refresh. Missions that
   break the PTN rules are flagged. New module `src/utils/wmm.py`.
+  Covers PTN's October 2026 expansion system, Col 285 Sector VF-E c12-5
+  (Bismarck Legacy and Sei Point), and Gallite as a fifth commodity. Totals
+  are also split per station, since sharing is done per station.
 - `get_faction_reputation`: reputation with each minor faction from the last
-  visit to a system, read from `Factions[].MyReputation`. Defaults to Mbutas
-  and Paemara.
+  visit to a system, read from `Factions[].MyReputation`. Defaults to the
+  PTN wing mining systems.
 - `get_ship_status` now reports landing pad size, jump range, cargo and fuel
   capacity, every module with its engineering, and capability flags such as
   `can_laser_mine`. New module `src/utils/inventory.py`.
 - Companion skill for AI clients in `skills/elite-dangerous-companion/`.
+- `search_journal_history`: search every journal file and get the original
+  events back, filtered by type, date and text, with an optional `fields`
+  projection for building series. Reads the files directly and never touches
+  the in-memory event store. New module `src/utils/raw_journal.py`.
+- `get_live_file`: list or read the state files the game rewrites in place
+  (Cargo, Market, NavRoute, Outfitting, Shipyard and others), with an item
+  filter for the large ones.
 - Initial project structure and configuration
 - Basic MCP server framework setup
 - Journal monitoring system foundation
@@ -72,6 +82,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get_material_inventory` now applies pickups, trades, engineering, synthesis,
   broker purchases and mission rewards made after the login snapshot.
 - `get_ship_status` module list was always empty.
+- Live journal tailing never worked on Windows. The game keeps its journal
+  open and only flushes, which produces no file-change notifications until the
+  file is closed, so a session started after the server was invisible. The
+  monitor now polls the newest journals every second and before every tool
+  call, and reads only complete lines.
+- Background monitoring was started on a setup event loop that never ran
+  again once the MCP framework took over, so the poll task and everything the
+  file-watcher scheduled were stranded. The monitor now moves itself onto the
+  live loop at the first tool call.
+- A new journal file could be delivered twice when both the watcher and a
+  poll saw it.
+- `get_mission_summary` crashed on missions with no reward, such as donations,
+  and listed completed missions as still active. It now also reports
+  `total_donated`.
+- `location_timestamp` now reflects the newest jump, carrier jump or docking,
+  not only the last login, and `location_event` names it. System allegiance,
+  economy, government and security were always empty.
 
 ### Changed
 - N/A

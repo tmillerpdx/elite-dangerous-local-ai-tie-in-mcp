@@ -280,7 +280,9 @@ class TestWmmTools:
         events = [_jump("Mbutas", [("Mbutas Systems", 100.0)], "2026-09-30T00:00:00Z")]
         tools = MCPTools(store, journal_reader=lambda days, event_types: events)
         result = await tools.get_faction_reputation()
-        assert [s["system"] for s in result["systems"]] == ["Mbutas", "Paemara"]
+        assert [s["system"] for s in result["systems"]] == [
+            "Mbutas", "Paemara", "Col 285 Sector VF-E c12-5",
+        ]
 
     async def test_reputation_accepts_a_system_list(self, store):
         tools = MCPTools(store, journal_reader=lambda days, event_types: [])
@@ -293,3 +295,60 @@ class TestWmmTools:
 
         result = await MCPTools(store, journal_reader=reader).get_wmm_stack()
         assert "journal folder unreadable" in result["error"]
+
+
+class TestExpansionSystem:
+    """PTN's October 2026 expansion WMM system and its fifth commodity.
+
+    Missions there read "Mining Expansion Support needs N Units of X" and are
+    stacked at Bismarck Legacy and Sei Point in Col 285 Sector VF-E c12-5.
+    Gallite joined the supported commodities; Bromellite and Indium did not.
+    """
+
+    SYSTEM = "Col 285 Sector VF-E c12-5"
+
+    def _expansion(self, mission_id, commodity, count, reward, station, ts):
+        event = _accepted(mission_id, commodity, count, reward, faction="Azimuth Biotech",
+                          expiry="2026-10-25T20:00:00Z", ts=ts)
+        event["LocalisedName"] = "Mining Expansion Support needs %d Units of %s" % (count, commodity)
+        return event
+
+    def _events(self):
+        return [
+            _docked("Sei Point", self.SYSTEM, ts="2026-10-18T20:00:00Z"),
+            self._expansion(1, "Bertrandite", 1000, 60000000, "Sei Point", "2026-10-18T20:01:00Z"),
+            self._expansion(2, "Gallite", 1076, 55000000, "Sei Point", "2026-10-18T20:02:00Z"),
+            _docked("Bismarck Legacy", self.SYSTEM, ts="2026-10-18T21:00:00Z"),
+            self._expansion(3, "Silver", 360, 30000000, "Bismarck Legacy", "2026-10-18T21:01:00Z"),
+        ]
+
+    def test_expansion_stations_and_gallite_count_as_wmm(self):
+        stack = build_wmm_stack(self._events(), datetime(2026, 10, 19, 1, 0, tzinfo=timezone.utc))
+        assert [m["flags"] for m in stack["missions"]] == [[], [], []]
+        assert stack["wmm_count"] == 3
+        assert stack["total_reward"] == 145000000
+        assert stack["totals_by_commodity"]["Gallite"]["tons_required"] == 1076
+
+    def test_bromellite_and_indium_stay_rejected_in_expansion_system(self):
+        events = [
+            _docked("Sei Point", self.SYSTEM),
+            _accepted(1, "Bromellite", 700),
+            _accepted(2, "Indium", 700),
+        ]
+        stack = build_wmm_stack(events, NOW)
+        assert [m["flags"] for m in stack["missions"]] == [["wrong_commodity"], ["wrong_commodity"]]
+
+    def test_totals_by_station(self):
+        now = datetime(2026, 10, 19, 1, 0, tzinfo=timezone.utc)
+        stack = build_wmm_stack(self._events(), now, cargo_capacity=0)
+        by_station = stack["totals_by_station"]
+        assert set(by_station) == {"Sei Point", "Bismarck Legacy"}
+        assert by_station["Sei Point"] == {
+            "system": self.SYSTEM, "missions": 2, "tons_required": 2076,
+            "tons_delivered": 0, "tons_remaining": 2076, "reward": 115000000,
+        }
+        assert by_station["Bismarck Legacy"]["tons_required"] == 360
+
+    def test_flagged_missions_stay_out_of_station_totals(self):
+        events = [_docked(), _accepted(1, "Bromellite", 700)]
+        assert build_wmm_stack(events, NOW)["totals_by_station"] == {}

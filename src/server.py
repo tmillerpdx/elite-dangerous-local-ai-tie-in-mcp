@@ -6,6 +6,7 @@ between Elite Dangerous, Claude Desktop, and EDCoPilot.
 """
 
 import asyncio
+import functools
 import logging
 import sys
 import signal
@@ -93,6 +94,8 @@ class EliteDangerousServer:
         
         # Initialize MCP server
         self.app = FastMCP("Elite Dangerous MCP Server")
+        # Every tool registered on the app catches up on the journal before it runs.
+        self._install_tool_catch_up()
         
         # Initialize components
         self.journal_monitor: Optional[JournalMonitor] = None
@@ -235,7 +238,8 @@ class EliteDangerousServer:
             # Initialize journal monitor with required parameters
             self.journal_monitor = JournalMonitor(
                 journal_path=self.config.journal_path,
-                event_callback=on_journal_event
+                event_callback=on_journal_event,
+                poll_interval=self._journal_poll_interval()
             )
             
             # Start monitoring
@@ -249,6 +253,49 @@ class EliteDangerousServer:
             logger.error(f"Failed to start journal monitoring: {e}")
             raise
     
+    def _journal_poll_interval(self) -> float:
+        """Seconds between journal polls, from config, defaulting to one second."""
+        try:
+            interval = float(getattr(self.config, "file_check_interval", 1.0))
+        except (TypeError, ValueError):
+            interval = 1.0
+        return interval if interval > 0 else 1.0
+
+    async def catch_up_journal(self) -> None:
+        """
+        Read anything the game has written since the last poll.
+
+        Called before every tool runs, so an answer never lags the journal by
+        even one poll interval, and a stalled background poll cannot leave the
+        server blind.
+        """
+        monitor = self.journal_monitor
+        if monitor is None:
+            return
+        try:
+            await monitor.poll_once()
+        except Exception as e:
+            logger.error(f"Error catching up on the journal before a tool call: {e}")
+
+    def _install_tool_catch_up(self) -> None:
+        """Make every tool registered from here on catch up on the journal first."""
+        register_tool = self.app.tool
+
+        def tool_with_catch_up(*args, **kwargs):
+            register = register_tool(*args, **kwargs)
+
+            def decorator(fn):
+                @functools.wraps(fn)
+                async def wrapper(*fn_args, **fn_kwargs):
+                    await self.catch_up_journal()
+                    return await fn(*fn_args, **fn_kwargs)
+
+                return register(wrapper)
+
+            return decorator
+
+        self.app.tool = tool_with_catch_up
+
     async def stop_journal_monitoring(self):
         """Stop journal monitoring gracefully."""
         if self.journal_monitor:
@@ -829,6 +876,84 @@ class EliteDangerousServer:
                            Paemara, the PTN wing mining systems.
             """
             return await self.mcp_tools.get_faction_reputation(systems=systems)
+
+        # ==================== Raw Journal Access ====================
+
+        @self.app.tool()
+        async def search_journal_history(
+            event_types: Optional[List[str]] = None,
+            start_date: str = "",
+            end_date: str = "",
+            contains_text: str = "",
+            fields: Optional[List[str]] = None,
+            limit: int = 200,
+            sort_order: str = "desc"
+        ) -> Dict[str, Any]:
+            """
+            Search the commander's entire journal history and get the original events back.
+
+            Use this for anything over time or anything the other tools do not cover:
+            net worth history, past ship loadouts, what was sold and when, when a
+            system was last visited. It reads every journal file directly, returns
+            each event exactly as the game wrote it, and does not change the
+            server's current state.
+
+            Whole events can be large (a Loadout or Statistics event is several
+            kilobytes). For a series, pass `fields` to get just the values.
+
+            Args:
+                event_types: Journal event names, e.g. ["Statistics"] or
+                             ["MarketSell", "MarketBuy"]. Capitalisation does not
+                             matter. Omit for every event type.
+                start_date: Start of range, inclusive. ISO ("2026-08-14") or natural
+                            language ("last week", "30 days ago"). Empty = from the
+                            first journal.
+                end_date: End of range, inclusive. Empty = up to now.
+                contains_text: Only events whose JSON contains this text, e.g. a
+                               system or commodity name.
+                fields: Dotted paths to return instead of whole events, e.g.
+                        ["Bank_Account.Current_Wealth"] or ["StarSystem", "JumpDist"].
+                        Each result then holds timestamp, event and those values.
+                limit: Most events to return (max 5000).
+                sort_order: "desc" (newest first) or "asc" (oldest first).
+
+            Examples:
+                Net worth over time:
+                    event_types=["Statistics"], fields=["Bank_Account.Current_Wealth"],
+                    sort_order="asc", limit=5000
+                Every wine sale:
+                    event_types=["MarketSell"], contains_text="wine"
+            """
+            return await self.mcp_tools.search_journal_history(
+                event_types=event_types,
+                start_date=start_date,
+                end_date=end_date,
+                contains_text=contains_text,
+                fields=fields,
+                limit=limit,
+                sort_order=sort_order
+            )
+
+        @self.app.tool()
+        async def get_live_file(filename: str = "", item_filter: str = "") -> Dict[str, Any]:
+            """
+            Read one of the game's live state files, or list them.
+
+            The game rewrites these as things change: Cargo (hold contents),
+            Market (prices at the docked station), NavRoute (plotted route),
+            Outfitting and Shipyard (what the docked station sells), ModulesInfo,
+            ShipLocker and Backpack (on-foot items), FCMaterials (carrier bartender),
+            Status (live flags and fuel). Market, Outfitting and Shipyard describe the
+            last station where the commander opened that screen; check
+            `age_seconds` and the station name inside before relying on them.
+
+            Args:
+                filename: e.g. "Cargo" or "Market.json". Empty = list the files
+                          with their sizes and last update times.
+                item_filter: Keep only entries of the file's main list that contain
+                             this text, e.g. filename="Market", item_filter="tritium".
+            """
+            return await self.mcp_tools.get_live_file(filename=filename, item_filter=item_filter)
 
         # ==================== Journey and Navigation Tools ====================
         

@@ -115,17 +115,23 @@ class JournalEventHandler(FileSystemEventHandler):
                 file_path, last_position
             )
             
+            # Record the position before awaiting anything. Reads are triggered
+            # both by the file-watcher and by the poller; with the position
+            # already advanced, neither can deliver the same lines twice.
+            self.current_positions[file_key] = new_position
+            self.monitored_files.add(file_key)
+
             if new_entries:
                 logger.debug(f"Processing {len(new_entries)} new entries from {file_path.name}")
-                
-                # Update position
-                self.current_positions[file_key] = new_position
-                
+
                 # Call callback with new entries
                 await self._safe_callback(new_entries, 'journal_entries')
-            
+
+            return len(new_entries)
+
         except Exception as e:
             logger.error(f"Error handling journal modification for {file_path}: {e}")
+            return 0
     
     async def _handle_journal_creation(self, file_path: Path):
         """
@@ -135,26 +141,13 @@ class JournalEventHandler(FileSystemEventHandler):
             file_path: Path to newly created journal file
         """
         try:
-            file_key = str(file_path)
-            
-            # Add to monitored files
-            self.monitored_files.add(file_key)
-            
-            # Initialize position tracking
-            self.current_positions[file_key] = 0
-            
-            # Read any existing content
-            entries, position = self.parser.read_journal_file(file_path)
-            
-            if entries:
-                logger.info(f"Read {len(entries)} entries from new journal file: {file_path.name}")
-                
-                # Update position
-                self.current_positions[file_key] = position
-                
-                # Call callback with entries
-                await self._safe_callback(entries, 'journal_entries')
-            
+            # Read from wherever tracking has got to (the start, for a file not
+            # seen before). Never reset the position here: the poller may have
+            # read this file already, and resetting would deliver it twice.
+            count = await self._handle_journal_modification(file_path)
+            if count:
+                logger.info(f"Read {count} entries from new journal file: {file_path.name}")
+
             # Notify about file rotation
             await self._safe_callback([{
                 'event_type': 'file_rotation',
@@ -255,16 +248,30 @@ class JournalMonitor:
     - Graceful startup and shutdown
     """
     
-    def __init__(self, journal_path: Path, event_callback: Callable):
+    # How many of the newest journals each poll looks at. One is the live
+    # session; the extras cover a relog that starts a new file mid-poll.
+    POLLED_JOURNALS = 3
+
+    def __init__(self, journal_path: Path, event_callback: Callable, poll_interval: float = 1.0):
         """
         Initialize journal monitor.
-        
+
         Args:
             journal_path: Path to Elite Dangerous journal directory
             event_callback: Callback function for journal events
+            poll_interval: Seconds between polls of the newest journals.
+                0 disables the background poll; poll_once() still works.
+
+        The game keeps its journal open and only flushes. On Windows that
+        produces no file-change notifications until the game closes the file,
+        so the file-watcher alone misses a whole session. Polling is what
+        actually follows the journal; the watcher is kept for Status.json and
+        as a faster path where notifications do arrive.
         """
         self.journal_path = Path(journal_path)
         self.event_callback = event_callback
+        self.poll_interval = float(poll_interval or 0)
+        self._poll_task: Optional[asyncio.Task] = None
         self.parser = JournalParser(journal_path)
         self.observer: Optional[Observer] = None
         self.event_handler: Optional[JournalEventHandler] = None
@@ -321,7 +328,10 @@ class JournalMonitor:
             
             # Process any existing entries in latest journal
             await self._process_existing_entries()
-            
+
+            if self.poll_interval > 0:
+                self._poll_task = asyncio.create_task(self._poll_loop())
+
             return True
             
         except Exception as e:
@@ -334,7 +344,24 @@ class JournalMonitor:
         try:
             self.is_monitoring = False
             self._stop_event.set()
-            
+
+            if self._poll_task is not None:
+                task = self._poll_task
+                self._poll_task = None
+                if task.get_loop() is asyncio.get_running_loop():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                elif not task.done():
+                    # Lives on another loop: ask that loop to cancel it. It
+                    # cannot be awaited from here.
+                    try:
+                        task.get_loop().call_soon_threadsafe(task.cancel)
+                    except RuntimeError:
+                        pass
+
             if self.observer:
                 self.observer.stop()
                 self.observer.join(timeout=5.0)
@@ -348,6 +375,87 @@ class JournalMonitor:
         except Exception as e:
             logger.error(f"Error stopping journal monitoring: {e}")
     
+    def attach_to_running_loop(self) -> bool:
+        """
+        Move background work onto the event loop that is running now.
+
+        The server starts monitoring on a setup loop and then hands control to
+        the MCP framework, which runs its own loop. The setup loop never runs
+        again, so the poll task created on it and every coroutine the
+        file-watcher schedules onto it would sit there forever. Calling this
+        from the live loop re-homes both.
+
+        Returns:
+            bool: True if anything was moved
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+
+        poll_wanted = self.is_monitoring and self.poll_interval > 0
+        poll_alive = (
+            self._poll_task is not None
+            and not self._poll_task.done()
+            and self._poll_task.get_loop() is loop
+        )
+        if self._event_loop is loop and (poll_alive or not poll_wanted):
+            return False
+
+        self._event_loop = loop
+        if self.event_handler is not None:
+            self.event_handler.event_loop = loop
+        if poll_wanted and not poll_alive:
+            stale = self._poll_task
+            if stale is not None and not stale.done():
+                try:
+                    stale.get_loop().call_soon_threadsafe(stale.cancel)
+                except RuntimeError:
+                    pass
+            self._poll_task = loop.create_task(self._poll_loop())
+        logger.info("Journal monitor attached to the running event loop")
+        return True
+
+    async def poll_once(self) -> int:
+        """
+        Read anything new from the newest journal files.
+
+        Safe to call at any time and as often as wanted: it reads from the
+        tracked position of each file, so nothing is delivered twice.
+
+        Returns:
+            int: Number of journal entries delivered to the callback
+        """
+        handler = self.event_handler
+        if handler is None:
+            return 0
+        self.attach_to_running_loop()
+        try:
+            newest_first = self.parser.find_journal_files(include_backups=False)
+        except Exception as e:
+            logger.error(f"Error listing journal files while polling: {e}")
+            return 0
+
+        delivered = 0
+        # Oldest first, so a relog's old file is finished before its new one.
+        for file_path in reversed(newest_first[:self.POLLED_JOURNALS]):
+            delivered += await handler._handle_journal_modification(file_path) or 0
+        return delivered
+
+    async def _poll_loop(self):
+        """Poll the newest journals until monitoring stops."""
+        logger.info(f"Journal polling started, every {self.poll_interval} seconds")
+        while self.is_monitoring:
+            try:
+                await asyncio.sleep(self.poll_interval)
+                await self.poll_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # Never let one bad poll end the loop: that is how a server
+                # goes blind for the rest of a session.
+                logger.error(f"Error polling journal files: {e}")
+
     async def wait_for_stop(self):
         """Wait for monitoring to be stopped."""
         await self._stop_event.wait()
@@ -394,20 +502,12 @@ class JournalMonitor:
             latest_journal = self.parser.get_latest_journal(include_backups=False)
             
             if latest_journal:
-                file_key = str(latest_journal)
-                
-                # Read existing entries
-                entries, position = self.parser.read_journal_file(latest_journal)
-                
-                if entries:
-                    logger.info(f"Processing {len(entries)} existing entries from {latest_journal.name}")
-                    
-                    # Update position
-                    self.event_handler.current_positions[file_key] = position
-                    
-                    # Call callback with existing entries
-                    await self.event_handler._safe_callback(entries, 'journal_entries')
-                
+                # Read through the same path the poller uses, so the position
+                # it leaves behind is one the poller can continue from.
+                count = await self.event_handler._handle_journal_modification(latest_journal)
+                if count:
+                    logger.info(f"Processed {count} existing entries from {latest_journal.name}")
+
                 # Also read current status
                 status_data = self.parser.read_status_file()
                 if status_data:
