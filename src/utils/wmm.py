@@ -1,4 +1,4 @@
-"""Wing mining mission (WMM) stack and faction reputation, read from the journal.
+"""Wing mining mission (WMM) stack, history and faction reputation, from the journal.
 
 Pure functions over raw journal event dicts, plus a small reader that pulls
 only the wanted event types out of recent journal files. The data store keeps
@@ -10,6 +10,8 @@ Journal facts used here:
 - MissionAccepted carries MissionID, Name, Faction, Commodity, Count, Reward,
   Expiry and the Wing flag, but not the station it was taken at; that comes
   from the Docked or Location event before it.
+- MissionCompleted carries MissionID, Faction, Commodity, Count and the
+  Reward actually paid, but not the station or the Wing flag.
 - CargoDepot carries ItemsDelivered and TotalItemsToDeliver per MissionID.
 - Missions is written at game start and lists every active mission.
 - FSDJump, Location and CarrierJump carry Factions[] with MyReputation
@@ -21,7 +23,7 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,11 @@ STACK_EVENT_TYPES: Set[str] = {
     "Docked", "Location", "MissionAccepted", "MissionCompleted", "MissionAbandoned",
     "MissionFailed", "Missions", "CargoDepot",
 }
+HISTORY_EVENT_TYPES: Set[str] = {
+    "Docked", "Location", "MissionAccepted", "MissionCompleted", "MissionAbandoned",
+    "MissionFailed",
+}
+HISTORY_GROUPINGS: List[str] = ["week", "commodity", "faction", "station"]
 REPUTATION_EVENT_TYPES: Set[str] = {"FSDJump", "Location", "CarrierJump"}
 
 _UNKNOWN_DETAIL_HINTS = ("mining", "collect", "wing")
@@ -102,6 +109,41 @@ def _mission_flags(mission: Dict[str, Any]) -> List[str]:
     return flags
 
 
+def _docked_at(event: Dict[str, Any]) -> Optional[Tuple[Optional[str], Optional[str]]]:
+    """(station, system) after a Docked or Location event, or None if not one."""
+    kind = event.get("event")
+    if kind == "Docked" or (kind == "Location" and event.get("Docked")):
+        return event.get("StationName"), event.get("StarSystem")
+    if kind == "Location":
+        return None, event.get("StarSystem")
+    return None
+
+
+def _mission_from_accepted(
+    event: Dict[str, Any], station: Optional[str], system: Optional[str]
+) -> Dict[str, Any]:
+    """The mission record build_wmm_stack keeps for a MissionAccepted event."""
+    count = event.get("Count")
+    commodity = _commodity_name(event)
+    return {
+        "mission_id": event["MissionID"],
+        "name": event.get("Name"),
+        "title": event.get("LocalisedName"),
+        "faction": event.get("Faction"),
+        "station": station,
+        "system": system,
+        "commodity": commodity,
+        "tons_required": int(count) if count is not None else None,
+        "tons_delivered": 0,
+        "reward": int(event.get("Reward") or 0),
+        "expiry_time": _parse_time(event.get("Expiry")),
+        "accepted_time": _parse_time(event.get("timestamp")),
+        "wing": bool(event.get("Wing")),
+        "is_cargo": commodity is not None and count is not None,
+        "details_known": True,
+    }
+
+
 def build_wmm_stack(
     events: Iterable[Dict[str, Any]], now: datetime, cargo_capacity: int = 0
 ) -> Dict[str, Any]:
@@ -117,31 +159,11 @@ def build_wmm_stack(
 
     for event in events:
         kind = event.get("event")
-        if kind == "Docked" or (kind == "Location" and event.get("Docked")):
-            station = event.get("StationName")
-            system = event.get("StarSystem")
-        elif kind == "Location":
-            station = None
-            system = event.get("StarSystem")
+        location = _docked_at(event)
+        if location is not None:
+            station, system = location
         elif kind == "MissionAccepted" and event.get("MissionID") is not None:
-            count = event.get("Count")
-            commodity = _commodity_name(event)
-            active[event["MissionID"]] = {
-                "mission_id": event["MissionID"],
-                "name": event.get("Name"),
-                "title": event.get("LocalisedName"),
-                "faction": event.get("Faction"),
-                "station": station,
-                "system": system,
-                "commodity": commodity,
-                "tons_required": int(count) if count is not None else None,
-                "tons_delivered": 0,
-                "reward": int(event.get("Reward") or 0),
-                "expiry_time": _parse_time(event.get("Expiry")),
-                "wing": bool(event.get("Wing")),
-                "is_cargo": commodity is not None and count is not None,
-                "details_known": True,
-            }
+            active[event["MissionID"]] = _mission_from_accepted(event, station, system)
         elif kind in ("MissionCompleted", "MissionAbandoned", "MissionFailed"):
             active.pop(event.get("MissionID"), None)
         elif kind == "CargoDepot":
@@ -264,6 +286,168 @@ def build_wmm_stack(
             "seconds_until": int((boundary - now).total_seconds()),
         },
     }
+
+
+def _in_range(moment: Optional[datetime], start: Optional[datetime],
+              end: Optional[datetime]) -> bool:
+    if moment is None:
+        return False
+    if start is not None and moment < start:
+        return False
+    if end is not None and moment > end:
+        return False
+    return True
+
+
+def _new_total(**extra: Any) -> Dict[str, Any]:
+    total: Dict[str, Any] = dict(extra)
+    total.update({"missions": 0, "tons": 0, "reward": 0, "_hours": []})
+    return total
+
+
+def _add_to_total(total: Dict[str, Any], row: Dict[str, Any]) -> None:
+    total["missions"] += 1
+    total["tons"] += row["tons"]
+    total["reward"] += row["reward"]
+    if row["hours_to_complete"] is not None:
+        total["_hours"].append(row["hours_to_complete"])
+
+
+def _finish_totals(totals: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    for total in totals.values():
+        hours = total.pop("_hours")
+        total["average_hours_to_complete"] = (
+            round(sum(hours) / len(hours), 1) if hours else None)
+    return totals
+
+
+def build_wmm_history(
+    events: Iterable[Dict[str, Any]],
+    start: Optional[datetime],
+    end: Optional[datetime],
+    group_by: str = "",
+) -> Dict[str, Any]:
+    """Completed wing mining missions, and trends, over a date range.
+
+    Events must be in time order and should begin well before start, since a
+    mission completed inside the range was accepted up to a week earlier.
+    Each MissionCompleted is paired with its MissionAccepted by MissionID for
+    faction, commodity, tonnage, the station it was taken at, the Wing flag
+    and the time taken. Only missions that pass the get_wmm_stack rules are
+    listed and totalled; the rest are counted. The range applies to the
+    completion time.
+
+    Args:
+        events: Raw journal events of HISTORY_EVENT_TYPES, oldest first
+        start, end: Inclusive bounds on completion time; None for no bound
+        group_by: "", for every grouping, or one of HISTORY_GROUPINGS
+    """
+    grouping = (group_by or "").strip().lower()
+    if grouping and grouping not in HISTORY_GROUPINGS:
+        return {
+            "error": "group_by must be one of %s, got '%s'" % (
+                ", ".join(HISTORY_GROUPINGS), group_by),
+            "valid_group_by": list(HISTORY_GROUPINGS),
+        }
+
+    station: Optional[str] = None
+    system: Optional[str] = None
+    accepted: Dict[Any, Dict[str, Any]] = {}
+    rows: List[Dict[str, Any]] = []
+    flagged = 0
+    unmatched = 0
+    abandoned = 0
+
+    for event in events:
+        kind = event.get("event")
+        location = _docked_at(event)
+        if location is not None:
+            station, system = location
+        elif kind == "MissionAccepted" and event.get("MissionID") is not None:
+            accepted[event["MissionID"]] = _mission_from_accepted(event, station, system)
+        elif kind in ("MissionAbandoned", "MissionFailed"):
+            mission = accepted.pop(event.get("MissionID"), None)
+            when = _parse_time(event.get("timestamp"))
+            if (mission is not None and mission["is_cargo"] and not _mission_flags(mission)
+                    and _in_range(when, start, end)):
+                abandoned += 1
+        elif kind == "MissionCompleted":
+            mission = accepted.pop(event.get("MissionID"), None)
+            when = _parse_time(event.get("timestamp"))
+            if not _in_range(when, start, end):
+                continue
+            if mission is None:
+                # Acceptance not in the events read. A cargo completion we
+                # cannot judge; anything else (a donation, a courier run)
+                # is not a WMM and is ignored.
+                if _commodity_name(event) is not None and event.get("Count") is not None:
+                    unmatched += 1
+                continue
+            if not mission["is_cargo"]:
+                continue
+            if _mission_flags(mission):
+                flagged += 1
+                continue
+            taken = mission["accepted_time"]
+            hours = (round((when - taken).total_seconds() / 3600.0, 1)
+                     if taken is not None else None)
+            year, week, _ = when.isocalendar()
+            rows.append({
+                "mission_id": mission["mission_id"],
+                "title": mission["title"] or mission["name"],
+                "faction": event.get("Faction") or mission["faction"],
+                "station": mission["station"],
+                "system": mission["system"],
+                "commodity": mission["commodity"],
+                "tons": int(event.get("Count") or mission["tons_required"] or 0),
+                "reward": int(event.get("Reward") or mission["reward"] or 0),
+                "wing": mission["wing"],
+                "accepted_at": taken.isoformat() if taken else None,
+                "completed_at": when.isoformat(),
+                "hours_to_complete": hours,
+                "iso_week": "%d-W%02d" % (year, week),
+            })
+
+    rows.sort(key=lambda r: (r["completed_at"], r["mission_id"]))
+
+    by_week: Dict[str, Dict[str, Any]] = {}
+    by_commodity: Dict[str, Dict[str, Any]] = {}
+    by_faction: Dict[str, Dict[str, Any]] = {}
+    by_station: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        completed = datetime.fromisoformat(row["completed_at"])
+        week_start = (completed - timedelta(days=completed.weekday())).date().isoformat()
+        _add_to_total(by_week.setdefault(row["iso_week"], _new_total(week_start=week_start)), row)
+        _add_to_total(by_commodity.setdefault(row["commodity"], _new_total()), row)
+        _add_to_total(by_faction.setdefault(row["faction"], _new_total()), row)
+        _add_to_total(by_station.setdefault(
+            row["station"], _new_total(system=row["system"])), row)
+
+    hours = [r["hours_to_complete"] for r in rows if r["hours_to_complete"] is not None]
+    result: Dict[str, Any] = {
+        "date_range": {
+            "start": start.isoformat() if start else None,
+            "end": end.isoformat() if end else None,
+        },
+        "completed_count": len(rows),
+        "total_tons": sum(r["tons"] for r in rows),
+        "total_reward": sum(r["reward"] for r in rows),
+        "average_hours_to_complete": round(sum(hours) / len(hours), 1) if hours else None,
+        "abandoned_or_failed_count": abandoned,
+        "flagged_completed_count": flagged,
+        "unmatched_completed_count": unmatched,
+    }
+    groupings = {
+        "week": ("totals_by_week", by_week),
+        "commodity": ("totals_by_commodity", by_commodity),
+        "faction": ("totals_by_faction", by_faction),
+        "station": ("totals_by_station", by_station),
+    }
+    for name in ([grouping] if grouping else HISTORY_GROUPINGS):
+        key, totals = groupings[name]
+        result[key] = _finish_totals(totals)
+    result["missions"] = rows
+    return result
 
 
 def faction_reputation(

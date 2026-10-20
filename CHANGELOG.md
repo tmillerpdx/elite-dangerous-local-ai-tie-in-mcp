@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Covers PTN's October 2026 expansion system, Col 285 Sector VF-E c12-5
   (Bismarck Legacy and Sei Point), and Gallite as a fifth commodity. Totals
   are also split per station, since sharing is done per station.
+- `get_wmm_history`: completed wing mining missions and trends over any date
+  range (`days`, default 90, or `start_date` and `end_date`), read from
+  every journal file through the raw journal scanner. Each `MissionCompleted`
+  is paired with its `MissionAccepted` for faction, commodity, tonnage,
+  reward paid, the station it was taken at, the wing flag and hours to
+  complete. Returns per-mission rows plus totals by ISO week, commodity,
+  faction and station (optionally one grouping via `group_by`), and counts of
+  flagged, unmatched and abandoned or failed missions. Applies the same PTN
+  rules as `get_wmm_stack`. New `iter_journal_events` generator in
+  `src/utils/raw_journal.py`; `build_wmm_stack` now shares its acceptance
+  parsing with the history builder.
 - `get_faction_reputation`: reputation with each minor faction from the last
   visit to a system, read from `Factions[].MyReputation`. Defaults to the
   PTN wing mining systems.

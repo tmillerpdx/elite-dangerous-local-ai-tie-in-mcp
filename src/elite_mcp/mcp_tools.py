@@ -16,12 +16,13 @@ try:
     from ..utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
     from ..utils.trade_dangerous import TradeDangerousClient
     from ..utils.raw_journal import (
-        list_live_files, read_live_file,
+        iter_journal_events, list_live_files, read_live_file,
         search_journal_history as search_raw_journal_history
     )
+    from ..utils.date_parser import DateParseError, parse_date_range
     from ..utils.wmm import (
-        REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS, build_wmm_stack,
-        faction_reputation, read_recent_journal_events
+        HISTORY_EVENT_TYPES, REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS,
+        build_wmm_history, build_wmm_stack, faction_reputation, read_recent_journal_events
     )
     from ..utils.inventory import (
         MATERIAL_CHANGE_EVENTS, compute_material_inventory, latest_by_timestamp, summarize_loadout
@@ -32,12 +33,13 @@ except ImportError:
     from src.utils.spansh_client import SpanshClient, laden_jump_range, ship_from_loadout
     from src.utils.trade_dangerous import TradeDangerousClient
     from src.utils.raw_journal import (
-        list_live_files, read_live_file,
+        iter_journal_events, list_live_files, read_live_file,
         search_journal_history as search_raw_journal_history
     )
+    from src.utils.date_parser import DateParseError, parse_date_range
     from src.utils.wmm import (
-        REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS, build_wmm_stack,
-        faction_reputation, read_recent_journal_events
+        HISTORY_EVENT_TYPES, REPUTATION_EVENT_TYPES, STACK_EVENT_TYPES, WMM_SYSTEMS,
+        build_wmm_history, build_wmm_stack, faction_reputation, read_recent_journal_events
     )
     from src.utils.inventory import (
         MATERIAL_CHANGE_EVENTS, compute_material_inventory, latest_by_timestamp, summarize_loadout
@@ -70,7 +72,8 @@ class MCPTools:
     - Performance metrics and statistics
     """
     
-    def __init__(self, data_store, spansh_client=None, trade_client=None, journal_reader=None):
+    def __init__(self, data_store, spansh_client=None, trade_client=None, journal_reader=None,
+                 history_reader=None):
         """
         Initialize MCP tools with data store reference.
 
@@ -80,11 +83,15 @@ class MCPTools:
             trade_client: Optional TradeDangerousClient, injectable for tests
             journal_reader: Optional callable (days, event_types) -> raw journal
                 events in time order, injectable for tests
+            history_reader: Optional callable (event_types, start, end) -> raw
+                journal events in time order from every journal file, injectable
+                for tests
         """
         self.data_store = data_store
         self.spansh_client = spansh_client or SpanshClient()
         self.trade_client = trade_client or TradeDangerousClient()
         self.journal_reader = journal_reader or self._read_journal_files
+        self.history_reader = history_reader or self._read_journal_history
         logger.info("MCP Tools initialized")
 
     # ==================== Nearby Search Tools (Spansh) ====================
@@ -579,6 +586,10 @@ class MCPTools:
     # A mission lasts up to a week; two weeks of journals covers every active one.
     WMM_STACK_LOOKBACK_DAYS = 14
     REPUTATION_LOOKBACK_DAYS = 180
+    WMM_HISTORY_DEFAULT_DAYS = 90
+    # A mission completed inside the range was accepted up to a week earlier;
+    # read this much before the range so every completion can be paired.
+    WMM_HISTORY_LEAD_DAYS = 30
 
     def _read_journal_files(self, days: float, event_types: Set[str]) -> List[Dict[str, Any]]:
         """Read raw events of the given types from recent journal files."""
@@ -586,6 +597,14 @@ class MCPTools:
             getattr(self.data_store, "journal_path", None), days, event_types,
             datetime.now(timezone.utc)
         )
+
+    def _read_journal_history(
+        self, event_types: Set[str], start: Optional[datetime], end: Optional[datetime]
+    ) -> List[Dict[str, Any]]:
+        """Read raw events of the given types from every journal file in the range."""
+        return list(iter_journal_events(
+            getattr(self.data_store, "journal_path", None), event_types, start, end
+        ))
 
     async def get_wmm_stack(self, cargo_capacity: int = 0) -> Dict[str, Any]:
         """
@@ -621,6 +640,58 @@ class MCPTools:
             return result
         except Exception as e:
             logger.error(f"Error building WMM stack: {e}")
+            return {"error": str(e)}
+
+    async def get_wmm_history(
+        self, days: int = 90, start_date: str = "", end_date: str = "", group_by: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Completed wing mining missions and trends over a date range.
+
+        Args:
+            days: How far back to look when no dates are given; 0 selects 90
+            start_date: Start of range, ISO or natural language; overrides days
+            end_date: End of range, inclusive; empty for up to now
+            group_by: "week", "commodity", "faction" or "station" to return
+                only that grouping; empty returns all four
+
+        Returns:
+            Dict with per-mission rows, totals and counts, or a structured error object
+        """
+        try:
+            folder = self._journal_folder()
+            if "error" in folder:
+                return folder
+            now = datetime.now(timezone.utc)
+            if start_date or end_date:
+                try:
+                    start, end = parse_date_range(start_date or None, end_date or None)
+                except (DateParseError, ValueError) as exc:
+                    return {"error": "Could not read the date range: %s" % exc}
+            else:
+                lookback = int(days or 0) or self.WMM_HISTORY_DEFAULT_DAYS
+                start, end = now - timedelta(days=lookback), now
+            read_from = (start - timedelta(days=self.WMM_HISTORY_LEAD_DAYS)) if start else None
+            read_to = end if (end is not None and end < now) else None
+            events = self.history_reader(HISTORY_EVENT_TYPES, read_from, read_to)
+            result = build_wmm_history(events, start, end, group_by)
+            if "error" in result:
+                return result
+            result["notes"] = [
+                "Read from the journal files; the range applies to the completion time. "
+                "Only missions that pass the get_wmm_stack rules are listed and totalled.",
+                "reward is the amount the game paid on completion; tons is the "
+                "delivered count. hours_to_complete runs from acceptance to completion.",
+                "flagged_completed_count: completed cargo missions that break the PTN "
+                "rules (wrong commodity, not wing, source and return, wrong station). "
+                "unmatched_completed_count: completed cargo missions whose acceptance "
+                "is not in the journals, for example one shared by a wingmate. "
+                "abandoned_or_failed_count: good WMMs given up or failed in the range.",
+                "Weeks are ISO weeks (Monday to Sunday), keyed like 2026-W40.",
+            ]
+            return result
+        except Exception as e:
+            logger.error(f"Error building WMM history: {e}")
             return {"error": str(e)}
 
     async def get_faction_reputation(self, systems: str = "") -> Dict[str, Any]:

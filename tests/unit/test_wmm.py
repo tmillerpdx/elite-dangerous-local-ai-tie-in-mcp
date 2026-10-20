@@ -15,7 +15,9 @@ import pytest
 
 from src.elite_mcp.mcp_tools import MCPTools
 from src.utils.data_store import DataStore, GameState
+from src.utils.raw_journal import iter_journal_events
 from src.utils.wmm import (
+    build_wmm_history,
     build_wmm_stack,
     faction_reputation,
     read_recent_journal_events,
@@ -352,3 +354,240 @@ class TestExpansionSystem:
     def test_flagged_missions_stay_out_of_station_totals(self):
         events = [_docked(), _accepted(1, "Bromellite", 700)]
         assert build_wmm_stack(events, NOW)["totals_by_station"] == {}
+
+
+def _completed(mission_id, commodity="Gold", count=200, reward=40000000,
+               faction="Mbutas Systems", ts="2026-10-02T10:00:00Z"):
+    return {
+        "timestamp": ts, "event": "MissionCompleted", "Faction": faction,
+        "Name": "Mission_Mining_Wing_name", "MissionID": mission_id,
+        "Commodity": "$%s_Name;" % commodity, "Commodity_Localised": commodity,
+        "Count": count, "Reward": reward, "FactionEffects": [],
+    }
+
+
+class TestBuildHistory:
+    """Completed wing mining missions and trends over a date range."""
+
+    START = datetime(2026, 9, 28, 0, 0, tzinfo=timezone.utc)
+    END = datetime(2026, 10, 12, 23, 59, 59, tzinfo=timezone.utc)
+
+    def _events(self):
+        return [
+            _docked(),
+            _accepted(1, "Gold", 200, 40000000, ts="2026-09-30T10:05:00Z"),
+            _accepted(2, "Silver", 400, 45000000, ts="2026-09-30T10:06:00Z"),
+            _docked("Rukavishnikov Terminal", "Paemara", ts="2026-10-05T09:00:00Z"),
+            _accepted(3, "Bertrandite", 300, 50000000, faction="Paemara Order",
+                      ts="2026-10-05T09:05:00Z"),
+            _accepted(4, "Gold", 100, 20000000, faction="Paemara Order",
+                      ts="2026-10-05T09:06:00Z"),
+            _completed(1, "Gold", 200, 41000000, ts="2026-10-02T10:05:00Z"),
+            _completed(2, "Silver", 400, 45000000, ts="2026-10-03T16:06:00Z"),
+            _completed(3, "Bertrandite", 300, 50000000, faction="Paemara Order",
+                       ts="2026-10-07T21:05:00Z"),
+            {"timestamp": "2026-10-08T00:00:00Z", "event": "MissionAbandoned", "MissionID": 4},
+        ]
+
+    def test_rows_pair_completion_with_acceptance(self):
+        history = build_wmm_history(self._events(), self.START, self.END)
+        assert history["completed_count"] == 3
+        assert history["abandoned_or_failed_count"] == 1
+        rows = history["missions"]
+        assert [r["mission_id"] for r in rows] == [1, 2, 3]  # completion order
+        gold = rows[0]
+        assert gold["faction"] == "Mbutas Systems"
+        assert gold["station"] == "Burkin Orbital"
+        assert gold["system"] == "Mbutas"
+        assert gold["commodity"] == "Gold"
+        assert gold["tons"] == 200
+        assert gold["reward"] == 41000000  # the reward actually paid
+        assert gold["wing"] is True
+        assert gold["accepted_at"] == "2026-09-30T10:05:00+00:00"
+        assert gold["completed_at"] == "2026-10-02T10:05:00+00:00"
+        assert gold["hours_to_complete"] == 48.0
+        assert gold["iso_week"] == "2026-W40"
+        assert history["total_tons"] == 900
+        assert history["total_reward"] == 136000000
+        assert history["average_hours_to_complete"] == round((48.0 + 78.0 + 60.0) / 3, 1)
+
+    def test_totals_by_week_commodity_faction_and_station(self):
+        history = build_wmm_history(self._events(), self.START, self.END)
+        assert history["totals_by_week"] == {
+            "2026-W40": {"week_start": "2026-09-28", "missions": 2, "tons": 600,
+                         "reward": 86000000, "average_hours_to_complete": 63.0},
+            "2026-W41": {"week_start": "2026-10-05", "missions": 1, "tons": 300,
+                         "reward": 50000000, "average_hours_to_complete": 60.0},
+        }
+        assert history["totals_by_commodity"]["Gold"] == {
+            "missions": 1, "tons": 200, "reward": 41000000, "average_hours_to_complete": 48.0,
+        }
+        assert set(history["totals_by_faction"]) == {"Mbutas Systems", "Paemara Order"}
+        assert history["totals_by_faction"]["Mbutas Systems"]["missions"] == 2
+        assert history["totals_by_station"]["Rukavishnikov Terminal"] == {
+            "system": "Paemara", "missions": 1, "tons": 300, "reward": 50000000,
+            "average_hours_to_complete": 60.0,
+        }
+
+    def test_group_by_keeps_only_that_grouping(self):
+        history = build_wmm_history(self._events(), self.START, self.END, group_by="faction")
+        assert "totals_by_faction" in history
+        for other in ("totals_by_week", "totals_by_commodity", "totals_by_station"):
+            assert other not in history
+
+    def test_unknown_group_by_is_an_error(self):
+        history = build_wmm_history(self._events(), self.START, self.END, group_by="pilot")
+        assert "error" in history
+        assert history["valid_group_by"] == ["week", "commodity", "faction", "station"]
+
+    def test_range_filters_on_completion_time_only(self):
+        start = datetime(2026, 10, 3, 0, 0, tzinfo=timezone.utc)
+        history = build_wmm_history(self._events(), start, self.END)
+        # Mission 2 was accepted before the range but completed inside it.
+        assert [r["mission_id"] for r in history["missions"]] == [2, 3]
+        assert history["abandoned_or_failed_count"] == 1
+        history = build_wmm_history(self._events(), self.START,
+                                    datetime(2026, 10, 4, 0, 0, tzinfo=timezone.utc))
+        assert [r["mission_id"] for r in history["missions"]] == [1, 2]
+        assert history["abandoned_or_failed_count"] == 0
+
+    def test_missions_that_break_the_rules_are_counted_but_not_totalled(self):
+        events = [
+            _docked(),
+            _accepted(1, "Bromellite", 700, ts="2026-09-30T10:05:00Z"),
+            _accepted(2, "Gold", 200, wing=False, name="Mission_Mining", ts="2026-09-30T10:06:00Z"),
+            _completed(1, "Bromellite", 700, ts="2026-10-01T10:00:00Z"),
+            _completed(2, "Gold", 200, ts="2026-10-01T11:00:00Z"),
+            _completed(9, "Gold", 200, ts="2026-10-01T12:00:00Z"),  # never accepted here
+        ]
+        history = build_wmm_history(events, self.START, self.END)
+        assert history["completed_count"] == 0
+        assert history["missions"] == []
+        assert history["flagged_completed_count"] == 2
+        assert history["unmatched_completed_count"] == 1
+        assert history["totals_by_commodity"] == {}
+        assert history["total_tons"] == 0
+
+    def test_non_cargo_completions_are_ignored(self):
+        events = [
+            _docked(),
+            {"timestamp": "2026-09-30T10:06:00Z", "event": "MissionAccepted",
+             "Faction": "Mbutas Systems", "Name": "Mission_AltruismCredits",
+             "Donation": "1000000", "Expiry": "2026-10-06T10:00:00Z", "Wing": False,
+             "MissionID": 50},
+            {"timestamp": "2026-09-30T10:07:00Z", "event": "MissionCompleted",
+             "Faction": "Mbutas Systems", "Name": "Mission_AltruismCredits_name",
+             "MissionID": 50, "Donated": 1000000},
+        ]
+        history = build_wmm_history(events, self.START, self.END)
+        assert history["completed_count"] == 0
+        assert history["flagged_completed_count"] == 0
+        assert history["unmatched_completed_count"] == 0
+
+    def test_empty_range_has_zero_totals_and_no_average(self):
+        history = build_wmm_history([], self.START, self.END)
+        assert history["completed_count"] == 0
+        assert history["average_hours_to_complete"] is None
+        assert history["totals_by_week"] == {}
+        assert history["date_range"] == {
+            "start": "2026-09-28T00:00:00+00:00", "end": "2026-10-12T23:59:59+00:00",
+        }
+
+
+class TestIterJournalEvents:
+    def test_reads_only_wanted_types_in_file_order(self, tmp_path):
+        first = tmp_path / "Journal.2026-09-29T000000.01.log"
+        first.write_text(
+            json.dumps(_docked()) + "\n" + json.dumps({"event": "Music"}) + "\nnot json\n",
+            encoding="utf-8")
+        second = tmp_path / "Journal.2026-09-30T000000.01.log"
+        second.write_text(json.dumps(_accepted(1)) + "\n", encoding="utf-8")
+        events = list(iter_journal_events(tmp_path, {"Docked", "MissionAccepted"}))
+        assert [e["event"] for e in events] == ["Docked", "MissionAccepted"]
+
+    def test_start_skips_files_that_end_before_it(self, tmp_path):
+        old = tmp_path / "Journal.2026-08-01T000000.01.log"
+        old.write_text(json.dumps(_docked("Old Port", ts="2026-08-01T01:00:00Z")) + "\n",
+                       encoding="utf-8")
+        new = tmp_path / "Journal.2026-09-30T000000.01.log"
+        new.write_text(json.dumps(_docked()) + "\n", encoding="utf-8")
+        start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        events = list(iter_journal_events(tmp_path, {"Docked"}, start=start))
+        assert [e["StationName"] for e in events] == ["Burkin Orbital"]
+
+    def test_missing_folder_yields_nothing(self, tmp_path):
+        assert list(iter_journal_events(tmp_path / "nope", {"Docked"})) == []
+        assert list(iter_journal_events(None, {"Docked"})) == []
+
+
+class TestWmmHistoryTool:
+    @pytest.fixture
+    def store(self, tmp_path):
+        store = Mock(spec=DataStore)
+        store.journal_path = tmp_path
+        return store
+
+    def _completed_wmm(self):
+        return [
+            _docked(ts="2026-09-30T10:00:00Z"),
+            _accepted(1, "Gold", 200, ts="2026-09-30T10:05:00Z"),
+            _completed(1, "Gold", 200, ts="2026-10-02T10:05:00Z"),
+        ]
+
+    async def test_defaults_to_the_last_90_days(self, store):
+        seen = {}
+
+        def reader(event_types, start, end):
+            seen.update(types=event_types, start=start, end=end)
+            return self._completed_wmm()
+
+        before = datetime.now(timezone.utc)
+        result = await MCPTools(store, history_reader=reader).get_wmm_history()
+        assert {"MissionAccepted", "MissionCompleted", "Docked"} <= seen["types"]
+        # The reader is asked for a lead window before the range so that
+        # acceptances before the start are still paired.
+        assert seen["start"] < before - timedelta(days=90)
+        assert seen["end"] is None
+        assert result["completed_count"] == 1
+        assert result["date_range"]["end"] is not None
+        assert "notes" in result
+
+    async def test_explicit_dates_override_days(self, store):
+        seen = {}
+
+        def reader(event_types, start, end):
+            seen.update(start=start, end=end)
+            return self._completed_wmm()
+
+        tools = MCPTools(store, history_reader=reader)
+        result = await tools.get_wmm_history(start_date="2026-10-01", end_date="2026-10-03")
+        assert result["date_range"] == {
+            "start": "2026-10-01T00:00:00+00:00", "end": "2026-10-03T23:59:59.999999+00:00",
+        }
+        assert seen["end"] == datetime(2026, 10, 3, 23, 59, 59, 999999, tzinfo=timezone.utc)
+        assert result["completed_count"] == 1
+
+    async def test_bad_date_is_an_error_object(self, store):
+        tools = MCPTools(store, history_reader=lambda *a: [])
+        result = await tools.get_wmm_history(start_date="not a date")
+        assert "error" in result
+
+    async def test_group_by_is_passed_through(self, store):
+        tools = MCPTools(store, history_reader=lambda *a: self._completed_wmm())
+        result = await tools.get_wmm_history(group_by="week")
+        assert "totals_by_week" in result and "totals_by_station" not in result
+
+    async def test_missing_journal_folder_is_an_error_object(self):
+        store = Mock(spec=DataStore)
+        store.journal_path = None
+        result = await MCPTools(store).get_wmm_history()
+        assert "error" in result
+
+    async def test_reads_real_files_through_the_raw_journal_scanner(self, store, tmp_path):
+        path = tmp_path / "Journal.2026-09-30T000000.01.log"
+        path.write_text("\n".join(json.dumps(e) for e in self._completed_wmm()) + "\n",
+                        encoding="utf-8")
+        result = await MCPTools(store).get_wmm_history(start_date="2026-10-01",
+                                                      end_date="2026-10-03")
+        assert result["completed_count"] == 1
+        assert result["missions"][0]["station"] == "Burkin Orbital"

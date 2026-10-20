@@ -862,6 +862,41 @@ class EliteDangerousServer:
             return await self.mcp_tools.get_wmm_stack(cargo_capacity=cargo_capacity)
 
         @self.app.tool()
+        async def get_wmm_history(
+            days: int = 90,
+            start_date: str = "",
+            end_date: str = "",
+            group_by: str = ""
+        ) -> Dict[str, Any]:
+            """
+            Show the commander's completed wing mining missions (WMMs) and trends.
+
+            Answers "how many WMMs have I turned in?", "how much Gold did I move
+            last month?", "which faction pays best?". Reads every journal file
+            in the range and pairs each MissionCompleted with its MissionAccepted
+            for faction, commodity, tonnage, reward actually paid, the station
+            it was taken at, the wing flag and hours from acceptance to
+            completion. Only missions that pass the PTN rules used by
+            get_wmm_stack are listed and totalled; others are counted in
+            flagged_completed_count. Also counts good WMMs abandoned or failed.
+            Returns per-mission rows plus totals by ISO week, commodity, faction
+            and station (missions, tons, reward, average hours). Reads local
+            files only.
+
+            Args:
+                days: How far back to look. 90 = the default. Ignored when a
+                           date is given.
+                start_date: Start of range, inclusive. ISO ("2026-08-01") or
+                            natural language ("3 months ago"). Overrides days.
+                end_date: End of range, inclusive. Empty = up to now.
+                group_by: "week", "commodity", "faction" or "station" to get
+                          only that grouping. Empty = all four.
+            """
+            return await self.mcp_tools.get_wmm_history(
+                days=days, start_date=start_date, end_date=end_date, group_by=group_by
+            )
+
+        @self.app.tool()
         async def get_faction_reputation(systems: str = "") -> Dict[str, Any]:
             """
             Show the commander's reputation with each minor faction in a system.

@@ -4,6 +4,8 @@ Read-only helpers that return the game's own data untouched:
 
 - search_journal_history: every event the commander has ever logged, as the
   original JSON, filtered by type, date and text.
+- iter_journal_events: the same scan as a generator, for tools that build
+  their own picture from one or two event types across the whole history.
 - list_live_files / read_live_file: the state files the game rewrites in place
   (Cargo.json, Market.json, NavRoute.json and so on).
 
@@ -17,7 +19,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set
 
 try:
     from ..journal.parser import JournalParser
@@ -83,6 +85,51 @@ def _files_for_range(parser: JournalParser, start: Optional[datetime],
             continue
         chosen.append(path)
     return chosen
+
+
+def iter_journal_events(
+    journal_path: Any,
+    event_types: Set[str],
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> Iterator[Dict[str, Any]]:
+    """Yield events of the wanted types from every journal file, oldest file first.
+
+    Within a file events come back in the order the game wrote them, so the
+    stream is in time order. Only files that can hold events in the range are
+    opened. A file that cannot be read is skipped with a warning.
+
+    Args:
+        journal_path: Folder holding the Journal.*.log files
+        event_types: Event names to keep, exact capitalisation as the game writes them
+        start, end: Inclusive bounds on the event timestamp; None for no bound
+    """
+    folder = Path(journal_path) if journal_path else None
+    if folder is None or not folder.is_dir() or not event_types:
+        return
+    wanted = set(event_types)
+    start_stamp, end_stamp = _stamp(start), _stamp(end)
+    for file_path in _files_for_range(JournalParser(folder), start, end):
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    name = _EVENT_NAME.search(line)
+                    if not name or name.group(1) not in wanted:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    stamp = str(event.get("timestamp") or "")
+                    if start_stamp and stamp < start_stamp:
+                        continue
+                    if end_stamp and stamp > end_stamp:
+                        continue
+                    yield event
+        except OSError as exc:
+            logger.warning("Could not read %s: %s", file_path.name, exc)
 
 
 def search_journal_history(
