@@ -105,7 +105,7 @@ The database is only as fresh as its last import, which the commander runs by ha
 
 ## Wing mining mission (WMM) tools (new, checked against real journals with no active stack)
 
-Both read the journal files directly on every call, so they see more than the server's one-day event window. Local files only.
+All three read the journal files directly on every call, so they see more than the server's one-day event window. Local files only.
 
 ### get_wmm_stack
 The active mission stack. Parameter: `cargo_capacity` (0 = the journal ship's hold) for the hauling plan.
@@ -117,6 +117,23 @@ Each mission: `mission_id`, `title`, `faction`, `station`, `system`, `commodity`
 Flags: `wrong_commodity` (anything but Gold, Silver, Bertrandite, Indite, Gallite; this catches Bromellite and Indium), `source_and_return`, `not_wing`, `unsupported_station` (not Burkin Orbital or Darlton Port in Mbutas, Rukavishnikov Terminal in Paemara, or Bismarck Legacy and Sei Point in Col 285 Sector VF-E c12-5), `details_unknown` (active, but its acceptance is not in the last 14 days of journals; a mission shared by a wingmate looks like this). Flagged missions are left out of the totals and the hauling plan. Tell the commander about every flagged mission.
 
 Not yet seen with a real stack: the commander had no wing mining missions when this was built, so the source-and-return check (mission name contains "Collect") and how missions received from wingmates appear are untested against real data.
+
+### get_wmm_history
+Completed wing mining missions and trends over a date range. Answers "how many WMMs have I turned in?", "how much Gold did I move last month?", "which faction or station pays best?".
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `days` | 90 | How far back to look when no date is given. |
+| `start_date`, `end_date` | none | Inclusive, on the completion time. ISO date or natural language ("3 months ago"). Either one overrides `days`. |
+| `group_by` | all four | `week`, `commodity`, `faction` or `station` to get only that grouping. |
+
+Reads every journal file that can hold events in the range (plus a 30 day lead so acceptances before the range are still paired) and pairs each `MissionCompleted` with its `MissionAccepted` by `MissionID`. The whole journal history scans in well under a second, so there is no cache. Only missions that pass the `get_wmm_stack` rules are listed and totalled.
+
+Returns `date_range`, `completed_count`, `total_tons`, `total_reward`, `average_hours_to_complete`, `abandoned_or_failed_count` (good WMMs given up or failed in the range), `flagged_completed_count` (completed cargo missions that break the PTN rules, so not counted), `unmatched_completed_count` (completed cargo missions whose acceptance is not in the journals, for example one shared by a wingmate), `totals_by_week` (keyed `2026-W40`, with `week_start`), `totals_by_commodity`, `totals_by_faction`, `totals_by_station` (with `system`), and `missions`. Each total has `missions`, `tons`, `reward` and `average_hours_to_complete`.
+
+Each mission row: `mission_id`, `title`, `faction`, `station`, `system`, `commodity`, `tons` (delivered count), `reward` (the amount the game paid on completion, which can differ from the offer), `wing`, `accepted_at`, `completed_at`, `hours_to_complete`, `iso_week`. Rows are in completion order, so they chart directly; `totals_by_week` is the series for a trend.
+
+Checked against the real journals: as of 20 October 2026 the commander had completed no mission that passes the rules, so `completed_count` was 0 and the Collect missions turned in at Burkin Orbital on 2 October showed up in `flagged_completed_count`. Tell the commander when a result is empty because of the rules rather than because nothing was done.
 
 ### get_faction_reputation
 Reputation per minor faction. Parameter: `systems`, comma separated; empty = Mbutas, Paemara and Col 285 Sector VF-E c12-5.
