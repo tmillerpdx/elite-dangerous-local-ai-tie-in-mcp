@@ -608,12 +608,15 @@ class MCPTools:
             result = build_wmm_stack(events, datetime.now(timezone.utc), capacity)
             result["notes"] = [
                 "Rebuilt from the last %d days of journal files." % self.WMM_STACK_LOOKBACK_DAYS,
-                "Flags: wrong_commodity (not Gold, Silver, Bertrandite or Indite), "
+                "Flags: wrong_commodity (not Gold, Silver, Bertrandite, Indite or Gallite), "
                 "source_and_return, not_wing, unsupported_station (not Burkin Orbital, "
-                "Darlton Port or Rukavishnikov Terminal), details_unknown (the mission is "
+                "Darlton Port, Rukavishnikov Terminal, Bismarck Legacy or Sei Point), "
+                "details_unknown (the mission is "
                 "active but its acceptance is not in the journals read, for example one "
                 "shared by a wingmate).",
                 "Flagged missions are left out of the totals and the hauling plan.",
+                "totals_by_station splits the good missions by the station they were "
+                "taken at, for sharing per station.",
             ]
             return result
         except Exception as e:

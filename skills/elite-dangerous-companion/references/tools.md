@@ -110,16 +110,16 @@ Both read the journal files directly on every call, so they see more than the se
 ### get_wmm_stack
 The active mission stack. Parameter: `cargo_capacity` (0 = the journal ship's hold) for the hauling plan.
 
-Returns `wmm_count` (good missions), `flagged_count`, `active_mission_count` and `mission_slots_left` (the game limit is 20 missions of any kind), `total_reward`, `earliest_expiry` (`mission_id`, `expiry`, `hours_left`, `alert` when under 48 hours), `totals_by_commodity` (`missions`, `tons_required`, `tons_delivered`, `tons_remaining`, `reward`), `hauling_plan` (`loads_by_commodity`, `total_tons_remaining`, `total_loads`), `missions` and `board_refresh` (next ten-minute boundary).
+Returns `wmm_count` (good missions), `flagged_count`, `active_mission_count` and `mission_slots_left` (the game limit is 20 missions of any kind), `total_reward`, `earliest_expiry` (`mission_id`, `expiry`, `hours_left`, `alert` when under 48 hours), `totals_by_commodity` (`missions`, `tons_required`, `tons_delivered`, `tons_remaining`, `reward`), `totals_by_station` (the same per station, plus `system`; sharing is done per station), `hauling_plan` (`loads_by_commodity`, `total_tons_remaining`, `total_loads`), `missions` and `board_refresh` (next ten-minute boundary).
 
 Each mission: `mission_id`, `title`, `faction`, `station`, `system`, `commodity`, `tons_required`, `tons_delivered`, `tons_remaining`, `reward`, `expiry`, `hours_left`, `wing`, `flags`.
 
-Flags: `wrong_commodity` (anything but Gold, Silver, Bertrandite, Indite; this catches Bromellite and Indium), `source_and_return`, `not_wing`, `unsupported_station` (not Burkin Orbital or Darlton Port in Mbutas, or Rukavishnikov Terminal in Paemara), `details_unknown` (active, but its acceptance is not in the last 14 days of journals; a mission shared by a wingmate looks like this). Flagged missions are left out of the totals and the hauling plan. Tell the commander about every flagged mission.
+Flags: `wrong_commodity` (anything but Gold, Silver, Bertrandite, Indite, Gallite; this catches Bromellite and Indium), `source_and_return`, `not_wing`, `unsupported_station` (not Burkin Orbital or Darlton Port in Mbutas, Rukavishnikov Terminal in Paemara, or Bismarck Legacy and Sei Point in Col 285 Sector VF-E c12-5), `details_unknown` (active, but its acceptance is not in the last 14 days of journals; a mission shared by a wingmate looks like this). Flagged missions are left out of the totals and the hauling plan. Tell the commander about every flagged mission.
 
 Not yet seen with a real stack: the commander had no wing mining missions when this was built, so the source-and-return check (mission name contains "Collect") and how missions received from wingmates appear are untested against real data.
 
 ### get_faction_reputation
-Reputation per minor faction. Parameter: `systems`, comma separated; empty = Mbutas and Paemara.
+Reputation per minor faction. Parameter: `systems`, comma separated; empty = Mbutas, Paemara and Col 285 Sector VF-E c12-5.
 
 Per system: `as_of` and `age_days` (when the game last wrote it), `factions` (`faction`, `reputation` from -100 to 100, `standing`, `allied`, `state`, `influence_percent`, `offers_wmm`), `not_allied`, `not_at_full_reputation`. A system not visited in the last 180 days of journals comes back with a note instead.
 

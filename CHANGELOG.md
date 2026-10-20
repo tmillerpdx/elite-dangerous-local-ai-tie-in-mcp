@@ -37,9 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per commodity, count toward the 20-mission limit, earliest expiry with a
   48 hour alert, a hauling plan and the next board refresh. Missions that
   break the PTN rules are flagged. New module `src/utils/wmm.py`.
+  Covers PTN's October 2026 expansion system, Col 285 Sector VF-E c12-5
+  (Bismarck Legacy and Sei Point), and Gallite as a fifth commodity. Totals
+  are also split per station, since sharing is done per station.
 - `get_faction_reputation`: reputation with each minor faction from the last
-  visit to a system, read from `Factions[].MyReputation`. Defaults to Mbutas
-  and Paemara.
+  visit to a system, read from `Factions[].MyReputation`. Defaults to the
+  PTN wing mining systems.
 - `get_ship_status` now reports landing pad size, jump range, cargo and fuel
   capacity, every module with its engineering, and capability flags such as
   `can_laser_mine`. New module `src/utils/inventory.py`.

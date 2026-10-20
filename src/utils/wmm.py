@@ -27,12 +27,16 @@ logger = logging.getLogger(__name__)
 
 MISSION_LIMIT = 20
 EXPIRY_ALERT_HOURS = 48.0
-WMM_COMMODITIES: Set[str] = {"Gold", "Silver", "Bertrandite", "Indite"}
+# PTN wing mining mission programme. PTN rotates systems, so these lists are
+# the one place to edit when it does. Station names are lower-case.
+WMM_COMMODITIES: Set[str] = {"Gold", "Silver", "Bertrandite", "Indite", "Gallite"}
 WMM_STATIONS: Dict[str, Set[str]] = {
     "mbutas": {"burkin orbital", "darlton port"},
     "paemara": {"rukavishnikov terminal"},
+    # Expansion-based WMM test, announced 17 Oct 2026.
+    "col 285 sector vf-e c12-5": {"bismarck legacy", "sei point"},
 }
-WMM_SYSTEMS: List[str] = ["Mbutas", "Paemara"]
+WMM_SYSTEMS: List[str] = ["Mbutas", "Paemara", "Col 285 Sector VF-E c12-5"]
 FACTIONS_WITHOUT_WMM: Set[str] = {"paemara gold posse"}
 
 STACK_EVENT_TYPES: Set[str] = {
@@ -172,6 +176,7 @@ def build_wmm_stack(
     live = [m for m in active.values() if m["expiry_time"] is None or m["expiry_time"] > now]
     missions: List[Dict[str, Any]] = []
     totals: Dict[str, Dict[str, int]] = {}
+    by_station: Dict[str, Dict[str, Any]] = {}
     for mission in live:
         if not mission["is_cargo"]:
             continue
@@ -205,6 +210,15 @@ def build_wmm_stack(
             total["tons_delivered"] += mission["tons_delivered"]
             total["tons_remaining"] += remaining
             total["reward"] += mission["reward"]
+            station_total = by_station.setdefault(mission["station"], {
+                "system": mission["system"], "missions": 0, "tons_required": 0,
+                "tons_delivered": 0, "tons_remaining": 0, "reward": 0,
+            })
+            station_total["missions"] += 1
+            station_total["tons_required"] += required
+            station_total["tons_delivered"] += mission["tons_delivered"]
+            station_total["tons_remaining"] += remaining
+            station_total["reward"] += mission["reward"]
 
     missions.sort(key=lambda m: (m["expiry"] is None, m["expiry"] or "", m["mission_id"]))
     dated = [m for m in missions if m["expiry"] is not None]
@@ -242,6 +256,7 @@ def build_wmm_stack(
         "total_reward": sum(m["reward"] for m in good),
         "earliest_expiry": earliest,
         "totals_by_commodity": totals,
+        "totals_by_station": by_station,
         "hauling_plan": hauling,
         "missions": missions,
         "board_refresh": {
