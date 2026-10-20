@@ -62,6 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation and setup guides
 
 ### Fixed
+- `scripts/generate_edcopilot.py` failed every run with "can't compare
+  offset-naive and offset-aware datetimes": the journal window was stripped
+  to naive datetimes while filename timestamps are timezone-aware.
+- `configure_ship_crew` discarded caller-supplied crew roles for a ship whose
+  type is not recognised, replacing them with a generic three-role guess.
+- `get_theme_status` now reports the documented `ship_count`, and
+  `get_edcopilot_status` the documented `path_exists`.
+- `EventProcessor` flags an unparsable timestamp as a validation error; it
+  previously passed such events as valid with the current time substituted.
+- `JournalParser.read_journal_file` gained `include_invalid` to keep
+  malformed entries for downstream validation instead of dropping them.
+- Theme tests no longer rewrite the tracked `edcopilot_themes/` files.
 - Current location was wrong after riding a fleet carrier, and after any restart:
   journal filename timestamps were timezone-naive, which aborted the startup
   history load; history files were replayed newest-first; and `CarrierJump` had

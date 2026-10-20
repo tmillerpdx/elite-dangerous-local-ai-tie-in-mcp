@@ -741,6 +741,7 @@ class ThemeGenerator:
 
         return {
             "current_theme": current_theme,
+            "ship_count": len(ship_configs),
             "ship_configurations": {
                 name: {
                     "crew_roles": config.crew_roles,

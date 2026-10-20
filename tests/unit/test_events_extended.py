@@ -9,7 +9,7 @@ Milestone 5: Event Processing and Classification completion.
 import pytest
 import time
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 import logging
 
@@ -39,10 +39,11 @@ class TestEventProcessorPerformance:
             {"event": "Docked", "StationName": "Station_{}", "StarSystem": "System_{}"},
         ]
         
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
         for i in range(1000):  # 1000 events for stress testing
             template = event_templates[i % len(event_templates)]
             event = {
-                "timestamp": f"2024-01-15T{(10 + i//60):02d}:{(i%60):02d}:00Z",
+                "timestamp": (start + timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 **{k: v.format(i) if isinstance(v, str) and '{}' in v else v 
                    for k, v in template.items()}
             }

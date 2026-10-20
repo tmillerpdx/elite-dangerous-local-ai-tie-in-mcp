@@ -441,6 +441,7 @@ class TestThemeGenerator:
         status = theme_generator.get_theme_status()
 
         assert "current_theme" in status
+        assert status["ship_count"] == 0
         assert "ship_configurations" in status
         assert "storage_info" in status
         assert "system_status" in status

@@ -104,6 +104,7 @@ class TestThemeMCPTools:
         result = await theme_tools.get_theme_status()
 
         assert "current_theme" in result
+        assert result["ship_count"] == 0
         assert "ship_configurations" in result
         assert "storage_info" in result
         assert "system_status" in result
@@ -247,6 +248,23 @@ class TestThemeMCPTools:
         assert ship_config is not None
         assert ship_config.ship_name == "Anaconda"
         assert len(ship_config.crew_roles) == 6  # Anaconda default configuration
+
+    @pytest.mark.asyncio
+    async def test_configure_ship_crew_unknown_type_keeps_explicit_roles(self, theme_tools):
+        """Explicit roles are kept for a ship whose type is not recognised."""
+        result = await theme_tools.configure_ship_crew(
+            ship_name="Deep Explorer",
+            crew_roles=["commander", "navigator", "science", "engineer"]
+        )
+
+        assert result["success"] is True
+        assert result["crew_roles"] == ["commander", "navigator", "science", "engineer"]
+        assert result["crew_count"] == 4
+
+        # No roles at all still falls back to the generic default crew
+        result = await theme_tools.configure_ship_crew(ship_name="Deep Explorer", crew_roles=[])
+        assert result["success"] is True
+        assert result["crew_count"] == 3
 
     @pytest.mark.asyncio
     async def test_configure_ship_crew_auto(self, theme_tools):

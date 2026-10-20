@@ -398,41 +398,59 @@ class ThemeStorage:
 
     # Default Ship Configurations
 
-    @staticmethod
-    def get_default_crew_for_ship(ship_name: str) -> List[str]:
-        """Get default crew composition for a ship type."""
-        ship_name_lower = ship_name.lower()
+    # Ship types with a known crew size. Names are matched after lowercasing
+    # and replacing spaces and hyphens with underscores.
+    SMALL_SHIPS = frozenset({
+        'sidewinder', 'eagle', 'hauler', 'adder', 'imperial_eagle',
+        'viper', 'viper_mkiv', 'cobra_mkiii', 'type_6', 'dolphin'
+    })
+    MEDIUM_SHIPS = frozenset({
+        'asp_explorer', 'vulture', 'alliance_chieftain', 'alliance_challenger',
+        'alliance_crusader', 'fer_de_lance', 'mamba', 'python', 'krait_mkii',
+        'krait_phantom', 'type_7'
+    })
+    LARGE_SHIPS = frozenset({
+        'anaconda', 'type_9', 'type_10', 'imperial_cutter', 'federal_corvette',
+        'federal_gunship', 'federal_assault_ship', 'imperial_clipper',
+        'orca', 'beluga'
+    })
 
-        # Small ships (1-2 crew)
-        small_ships = {
-            'sidewinder', 'eagle', 'hauler', 'adder', 'imperial_eagle',
-            'viper', 'viper_mkiv', 'cobra_mkiii', 'type_6', 'dolphin'
-        }
+    @classmethod
+    def _ship_size_class(cls, ship_name: str) -> Optional[str]:
+        """Return 'small', 'medium' or 'large' for a recognised ship type, else None."""
+        normalized_name = ship_name.lower().replace(' ', '_').replace('-', '_')
+        if any(ship in normalized_name for ship in cls.SMALL_SHIPS):
+            return 'small'
+        if any(ship in normalized_name for ship in cls.MEDIUM_SHIPS):
+            return 'medium'
+        if any(ship in normalized_name for ship in cls.LARGE_SHIPS):
+            return 'large'
+        return None
 
-        # Medium ships (3-4 crew)
-        medium_ships = {
-            'asp_explorer', 'vulture', 'alliance_chieftain', 'alliance_challenger',
-            'alliance_crusader', 'fer_de_lance', 'mamba', 'python', 'krait_mkii',
-            'krait_phantom', 'type_7'
-        }
+    @classmethod
+    def is_known_ship_type(cls, ship_name: str) -> bool:
+        """Whether a ship name carries a recognised ship type (e.g. 'Anaconda')."""
+        return cls._ship_size_class(ship_name) is not None
 
-        # Large ships (5+ crew)
-        large_ships = {
-            'anaconda', 'type_9', 'type_10', 'imperial_cutter', 'federal_corvette',
-            'federal_gunship', 'federal_assault_ship', 'imperial_clipper',
-            'orca', 'beluga'
-        }
+    @classmethod
+    def get_default_crew_for_ship(cls, ship_name: str) -> List[str]:
+        """
+        Get default crew composition for a ship type.
 
-        # Normalize ship name for matching
-        normalized_name = ship_name_lower.replace(' ', '_').replace('-', '_')
+        Unknown ship types get a generic medium-ship crew; check
+        is_known_ship_type() first when that guess should not win over
+        caller-supplied roles.
+        """
+        normalized_name = ship_name.lower().replace(' ', '_').replace('-', '_')
+        size_class = cls._ship_size_class(ship_name)
 
-        if any(ship in normalized_name for ship in small_ships):
+        if size_class == 'small':
             if 'sidewinder' in normalized_name or 'eagle' in normalized_name:
                 return [CrewRole.COMMANDER.value]  # Solo pilot
             else:
                 return [CrewRole.COMMANDER.value, CrewRole.ENGINEER.value]
 
-        elif any(ship in normalized_name for ship in medium_ships):
+        elif size_class == 'medium':
             return [
                 CrewRole.COMMANDER.value,
                 CrewRole.NAVIGATOR.value,
@@ -440,7 +458,7 @@ class ThemeStorage:
                 CrewRole.SCIENCE_OFFICER.value
             ]
 
-        elif any(ship in normalized_name for ship in large_ships):
+        elif size_class == 'large':
             return [
                 CrewRole.COMMANDER.value,
                 CrewRole.NAVIGATOR.value,

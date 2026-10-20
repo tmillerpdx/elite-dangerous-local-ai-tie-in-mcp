@@ -9,7 +9,7 @@ import pytest
 import json
 import asyncio
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, AsyncMock, patch
 
 from src.journal import (
@@ -347,7 +347,8 @@ class TestEventProcessingPipeline:
         
         # Parse and process
         parser = JournalParser(str(tmp_path))
-        entries, _ = parser.read_journal_file(journal)
+        # Keep the malformed entries so the processor is the one to flag them
+        entries, _ = parser.read_journal_file(journal, include_invalid=True)
         
         # Process all events
         processor = EventProcessor()
@@ -374,10 +375,11 @@ class TestEventProcessingPipeline:
         """Test pipeline performance with large number of events."""
         # Create journal with many events
         events = []
+        start = datetime(2024, 1, 15, 9, 0, 0, tzinfo=timezone.utc)
         for i in range(1000):
             event_type = ["FSDJump", "Scan", "Docked", "MarketBuy", "Bounty"][i % 5]
             events.append({
-                "timestamp": f"2024-01-15T{9 + (i // 60):02d}:{i % 60:02d}:00Z",
+                "timestamp": (start + timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "event": event_type,
                 "StarSystem": f"System{i}",
                 "BodyName": f"Body{i}",

@@ -17,6 +17,16 @@ from src.edcopilot.theme_mcp_tools import ThemeMCPTools
 from src.utils.data_store import DataStore
 
 
+@pytest.fixture(autouse=True)
+def isolated_working_directory(tmp_path, monkeypatch):
+    """Run each test from a scratch directory.
+
+    ThemeStorage() and ThemeMCPTools() default to <cwd>/edcopilot_themes, so
+    without this the tests would rewrite the repository's tracked theme files.
+    """
+    monkeypatch.chdir(tmp_path)
+
+
 class TestThemeStorageEdgeCases:
     """Test edge cases and boundary conditions for theme storage."""
 

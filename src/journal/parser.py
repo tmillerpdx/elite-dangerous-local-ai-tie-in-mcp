@@ -161,15 +161,19 @@ class JournalParser:
         
         return True
     
-    def parse_journal_entry(self, line: str) -> Optional[Dict]:
+    def parse_journal_entry(self, line: str, validate: bool = True) -> Optional[Dict]:
         """
         Parse a single journal entry using orjson for performance.
 
         Args:
             line: Raw JSON line from journal file
+            validate: Drop entries that lack a timestamp or event type, or
+                whose timestamp is malformed. Pass False to keep every JSON
+                object so a downstream EventProcessor can flag the bad ones.
             
         Returns:
-            Optional[Dict]: Parsed journal entry, or None if invalid
+            Optional[Dict]: Parsed journal entry, or None if it could not be
+                decoded or (with validate=True) is missing required fields
         """
         try:
             # Strip whitespace and skip empty lines
@@ -185,18 +189,23 @@ class JournalParser:
                 logger.warning(f"Journal entry is not a dictionary: {type(entry)}")
                 return None
             
-            # Ensure timestamp exists and is valid
+            # Check the required fields. The entry is dropped unless the
+            # caller asked to keep malformed entries.
+            well_formed = True
             if 'timestamp' not in entry:
                 logger.warning("Journal entry missing timestamp")
-                return None
+                well_formed = False
             
-            if not self._is_valid_timestamp(entry['timestamp']):
+            elif not self._is_valid_timestamp(entry['timestamp']):
                 logger.warning(f"Journal entry has invalid timestamp format: {entry.get('timestamp')}")
-                return None
+                well_formed = False
             
             # Ensure event type exists
             if 'event' not in entry:
                 logger.warning("Journal entry missing event type")
+                well_formed = False
+
+            if not well_formed and validate:
                 return None
             
             return entry
@@ -208,13 +217,22 @@ class JournalParser:
             logger.error(f"Unexpected error parsing journal entry: {e}")
             return None
     
-    def read_journal_file(self, file_path: Path, start_position: int = 0) -> Tuple[List[Dict], int]:
+    def read_journal_file(
+        self,
+        file_path: Path,
+        start_position: int = 0,
+        include_invalid: bool = False
+    ) -> Tuple[List[Dict], int]:
         """
         Read and parse entire journal file from specified position.
 
         Args:
             file_path: Path to journal file
             start_position: File position to start reading from (for incremental reads)
+            include_invalid: Keep entries that are JSON objects but lack a
+                timestamp or event type, or have a malformed timestamp, so
+                the caller can validate them (see EventProcessor). By default
+                such entries are dropped with a warning.
             
         Returns:
             Tuple[List[Dict], int]: (parsed entries, final file position)
@@ -234,14 +252,14 @@ class JournalParser:
                 line_count = 0
                 for line in f:
                     line_count += 1
-                    entry = self.parse_journal_entry(line)
-                    if entry:
+                    entry = self.parse_journal_entry(line, validate=not include_invalid)
+                    if entry is not None:
                         entries.append(entry)
                 
                 # Get final file position
                 final_position = f.tell()
             
-            logger.info(f"Read {len(entries)} valid entries from {line_count} lines in {file_path.name}")
+            logger.info(f"Read {len(entries)} entries from {line_count} lines in {file_path.name}")
             return entries, final_position
             
         except UnicodeDecodeError as e:
@@ -299,7 +317,7 @@ class JournalParser:
             new_entries = []
             for line in complete.decode(self.encoding, errors='replace').splitlines():
                 entry = self.parse_journal_entry(line)
-                if entry:
+                if entry is not None:
                     new_entries.append(entry)
 
             new_position = last_position + len(complete)

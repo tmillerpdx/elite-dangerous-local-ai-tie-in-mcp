@@ -389,6 +389,20 @@ class EventProcessor:
             logger.warning(f"Failed to parse timestamp: {timestamp_str}")
             return datetime.now(timezone.utc)
     
+    @staticmethod
+    def _is_parsable_timestamp(timestamp_value: Any) -> bool:
+        """Whether a timestamp is an ISO 8601 string that fromisoformat() accepts."""
+        if not isinstance(timestamp_value, str):
+            return False
+        candidate = timestamp_value
+        if candidate.endswith('Z'):
+            candidate = candidate[:-1] + '+00:00'
+        try:
+            datetime.fromisoformat(candidate)
+        except ValueError:
+            return False
+        return True
+
     def _validate_event(self, event: Dict[str, Any]) -> List[str]:
         """
         Validate event structure and required fields.
@@ -413,12 +427,10 @@ class EventProcessor:
             errors.append("Missing required field: 'timestamp'")
         elif event["timestamp"] is None or event["timestamp"] == "":
             errors.append("Timestamp field cannot be None or empty string")
-        else:
-            # Validate timestamp format
-            try:
-                self._parse_timestamp(event["timestamp"])
-            except Exception:
-                errors.append(f"Invalid timestamp format: {event.get('timestamp')}")
+        elif not self._is_parsable_timestamp(event["timestamp"]):
+            # _parse_timestamp() substitutes the current time so the event is
+            # not lost, but it never raises, so check the format here.
+            errors.append(f"Invalid timestamp format: {event.get('timestamp')}")
         
         return errors
     
