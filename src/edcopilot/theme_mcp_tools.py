@@ -430,9 +430,14 @@ class ThemeMCPTools:
 
             ship_name = ship_name.strip()
 
-            # Auto-configure crew roles if not specified
-            if crew_roles is None or auto_configure:
-                crew_roles = self.theme_storage.get_default_crew_for_ship(ship_name)
+            # Auto-configure from the ship type when asked to, or when no
+            # roles were given. For a ship whose type is not recognised the
+            # detector can only guess a generic crew, so explicitly supplied
+            # roles win there instead of being silently discarded.
+            if not crew_roles or auto_configure:
+                detected_roles = self.theme_storage.get_default_crew_for_ship(ship_name)
+                if not crew_roles or self.theme_storage.is_known_ship_type(ship_name):
+                    crew_roles = detected_roles
 
             if not crew_roles:
                 return {"success": False, "error": "No crew roles specified or detected"}
@@ -652,6 +657,8 @@ class ThemeMCPTools:
                 return {
                     "success": True,
                     "backup_name": None,
+                    "backup_path": None,
+                    "timestamp": None,
                     "current_theme": None,
                     "ship_configs_count": 0,
                     "themes_backed_up": 0,
@@ -677,6 +684,9 @@ class ThemeMCPTools:
             return {
                 "success": True,
                 "backup_name": backup_name,
+                # The backup is a preset, so it lives in the presets file
+                "backup_path": str(self.theme_storage.presets_file),
+                "timestamp": timestamp,
                 "current_theme": current_theme,
                 "ship_configs_count": len(ship_configs),
                 "themes_backed_up": (1 if current_theme else 0) + len(ship_configs),

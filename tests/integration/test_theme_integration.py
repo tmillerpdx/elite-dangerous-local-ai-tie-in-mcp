@@ -5,56 +5,68 @@ Tests end-to-end workflows and integration between theme system components.
 """
 
 import pytest
-import tempfile
 import asyncio
 import json
 from pathlib import Path
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.edcopilot.theme_storage import ThemeStorage, ShipCrewConfig, CrewMemberTheme
 from src.edcopilot.theme_generator import ThemeGenerator, ThemePromptContext
 from src.edcopilot.theme_mcp_tools import ThemeMCPTools
+from src.journal.events import EventProcessor
 from src.utils.data_store import DataStore
 from src.utils.config import EliteConfig
+
+
+def store_journal_event(data_store: DataStore, event: Dict[str, Any]) -> None:
+    """Run a raw journal event through the real processing pipeline."""
+    data_store.store_event(EventProcessor().process_event(event))
 
 
 class TestThemeSystemIntegration:
     """Test integration between all theme system components."""
 
     @pytest.fixture
-    async def integrated_system(self):
-        """Create fully integrated theme system for testing."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create test configuration
-            config = EliteConfig(
-                edcopilot_path=Path(temp_dir) / "edcopilot_files"
-            )
-            config.edcopilot_path.mkdir(parents=True, exist_ok=True)
+    async def integrated_system(self, tmp_path, monkeypatch):
+        """Create fully integrated theme system for testing.
 
-            # Initialize components
-            data_store = DataStore()
-            storage = ThemeStorage(storage_path=Path(temp_dir) / "themes.json")
-            generator = ThemeGenerator(storage)
+        Everything lives under tmp_path, including the working directory, so
+        a ThemeMCPTools built with its default ThemeStorage() never touches
+        the repository's tracked edcopilot_themes/ files.
+        """
+        monkeypatch.chdir(tmp_path)
 
-            # Mock EDCoPilotGenerator for testing
-            with patch('src.edcopilot.theme_mcp_tools.EDCoPilotGenerator') as mock_generator_class:
-                mock_generator = MagicMock()
-                mock_generator.backup_files = AsyncMock(return_value={"success": True, "backups": []})
-                mock_generator_class.return_value = mock_generator
+        # Create test configuration
+        config = EliteConfig(
+            edcopilot_path=tmp_path / "edcopilot_files"
+        )
+        config.edcopilot_path.mkdir(parents=True, exist_ok=True)
 
-                mcp_tools = ThemeMCPTools(data_store)
+        # Initialize components
+        data_store = DataStore()
+        storage = ThemeStorage(storage_path=tmp_path / "themes")
+        generator = ThemeGenerator(storage)
 
-                # Override storage in MCP tools for testing
-                mcp_tools.theme_storage = storage
-                mcp_tools.theme_generator = generator
+        # Mock EDCoPilotGenerator for testing
+        with patch('src.edcopilot.theme_mcp_tools.EDCoPilotGenerator') as mock_generator_class:
+            mock_generator = MagicMock()
+            mock_generator.backup_files = AsyncMock(return_value={"success": True, "backups": []})
+            mock_generator_class.return_value = mock_generator
 
-            yield {
-                'config': config,
-                'data_store': data_store,
-                'storage': storage,
-                'generator': generator,
-                'mcp_tools': mcp_tools
-            }
+            mcp_tools = ThemeMCPTools(data_store)
+
+            # Override storage in MCP tools for testing
+            mcp_tools.theme_storage = storage
+            mcp_tools.theme_generator = generator
+
+        yield {
+            'config': config,
+            'data_store': data_store,
+            'storage': storage,
+            'generator': generator,
+            'mcp_tools': mcp_tools
+        }
 
     @pytest.mark.asyncio
     async def test_complete_theme_workflow(self, integrated_system):
@@ -239,21 +251,31 @@ class TestThemeSystemIntegration:
         # Set up initial state
         await mcp_tools.set_edcopilot_theme("initial_theme", "initial context")
 
-        # Simulate game state changes that might affect themes
+        # Simulate game state changes that might affect themes, fed through
+        # the real journal pipeline
         game_state_updates = [
-            {"ship_name": "New Ship Detected", "location": "Jameson Memorial"},
-            {"activity": "exploration", "system": "Distant System"},
-            {"status": "docked", "station": "Research Station"}
+            {"timestamp": "2024-01-15T10:00:00Z", "event": "Loadout",
+             "Ship": "anaconda", "ShipName": "New Ship Detected"},
+            {"timestamp": "2024-01-15T10:05:00Z", "event": "FSDJump",
+             "StarSystem": "Distant System"},
+            {"timestamp": "2024-01-15T10:10:00Z", "event": "Docked",
+             "StationName": "Research Station", "StarSystem": "Distant System"},
         ]
 
         for update in game_state_updates:
             # Update data store
-            for key, value in update.items():
-                data_store.update_field(key, value)
+            store_journal_event(data_store, update)
 
             # Verify theme system can adapt
             status = await mcp_tools.get_theme_status()
             assert status["success"] is True
+
+        # The data store reflects the events the theme system was asked about
+        game_state = data_store.get_game_state()
+        assert game_state.ship_name == "New Ship Detected"
+        assert game_state.current_system == "Distant System"
+        assert game_state.current_station == "Research Station"
+        assert game_state.docked is True
 
     @pytest.mark.asyncio
     async def test_performance_under_load(self, integrated_system):
@@ -295,18 +317,21 @@ class TestThemeSystemIntegration:
         # Simulate Elite Dangerous events
         elite_events = [
             {
+                "timestamp": "2024-01-15T11:00:00Z",
                 "event": "FSDJump",
                 "StarSystem": "Wolf 359",
                 "StarClass": "M",
                 "SystemFaction": {"Name": "Independent"}
             },
             {
+                "timestamp": "2024-01-15T11:05:00Z",
                 "event": "Scan",
                 "ScanType": "Detailed",
                 "BodyName": "Wolf 359 A",
                 "PlanetClass": "Rocky body"
             },
             {
+                "timestamp": "2024-01-15T11:10:00Z",
                 "event": "Docked",
                 "StationName": "Jameson Memorial",
                 "StationType": "Orbis"
@@ -314,9 +339,8 @@ class TestThemeSystemIntegration:
         ]
 
         for event in elite_events:
-            # Update data store with event data
-            for key, value in event.items():
-                data_store.update_field(key, value)
+            # Run the event through the real journal pipeline
+            store_journal_event(data_store, event)
 
             # Generate preview to see how theme adapts
             preview = await mcp_tools.preview_themed_content()

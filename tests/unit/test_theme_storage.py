@@ -266,6 +266,14 @@ class TestThemeStorage:
         assert len(unknown_crew) == 3
         assert CrewRole.COMMANDER.value in unknown_crew
 
+    def test_is_known_ship_type(self):
+        """Recognised ship types are reported; arbitrary ship names are not."""
+        assert ThemeStorage.is_known_ship_type("Anaconda")
+        assert ThemeStorage.is_known_ship_type("My Asp Explorer")
+        assert ThemeStorage.is_known_ship_type("krait-mkii")
+        assert not ThemeStorage.is_known_ship_type("Deep Explorer")
+        assert not ThemeStorage.is_known_ship_type("")
+
     def test_theme_history(self, temp_storage):
         """Test theme history tracking."""
         storage = temp_storage

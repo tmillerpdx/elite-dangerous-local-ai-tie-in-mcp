@@ -1974,6 +1974,7 @@ class MCPTools:
                 return {
                     "status": "not_configured",
                     "edcopilot_path": str(config.edcopilot_path),
+                    "path_exists": False,
                     "exists": False,
                     "message": "EDCoPilot directory not found. Set ELITE_EDCOPILOT_PATH environment variable."
                 }
@@ -1996,6 +1997,7 @@ class MCPTools:
             return {
                 "status": "available",
                 "edcopilot_path": str(config.edcopilot_path),
+                "path_exists": True,
                 "exists": True,
                 "custom_files": file_info,
                 "total_files": len(custom_files),

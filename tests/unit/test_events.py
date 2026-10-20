@@ -235,8 +235,11 @@ class TestEventProcessor:
         event = sample_events["invalid_timestamp"]
         processed = processor.process_event(event)
         
-        assert processed.is_valid  # Should still be valid, just use current time
-        assert processed.event_type == "TestEvent"
+        # The event is kept, with the current time substituted, but flagged
+        assert not processed.is_valid
+        assert "Invalid timestamp format: invalid-timestamp" in processed.validation_errors
+        assert processed.timestamp.tzinfo is not None
+        assert processed.event_type == "Unknown"
         
         # Test missing event field
         event = sample_events["missing_event"]

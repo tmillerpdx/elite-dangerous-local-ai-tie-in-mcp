@@ -137,14 +137,13 @@ def ingest_journals(journal_path: Path, start_utc: datetime, end_utc: datetime, 
     processor = EventProcessor()
     files = parser.find_journal_files(include_backups=True)
 
-    # Compare by filename timestamp; convert UTC to naive for comparison
-    start_naive = start_utc.replace(tzinfo=None)
-    end_naive = end_utc.replace(tzinfo=None)
-
+    # Filename timestamps come back timezone-aware (UTC), as are the window
+    # bounds, so compare them directly. Stripping tzinfo here raised
+    # "can't compare offset-naive and offset-aware datetimes".
     count = 0
     for f in files:
         ts = parser._extract_timestamp_from_filename(f)
-        if ts < start_naive or ts > end_naive:
+        if ts < start_utc or ts > end_utc:
             continue
         entries, _ = parser.read_journal_file(f)
         for e in entries:

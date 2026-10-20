@@ -696,6 +696,31 @@ class TestJournalParserEdgeCases:
         assert pos4 == pos1
 
 
+    def test_read_journal_file_include_invalid(self, isolated_temp_dir):
+        """include_invalid=True keeps malformed entries for downstream validation."""
+        parser = JournalParser(isolated_temp_dir)
+        journal = isolated_temp_dir / "Journal.20240906210000.01.log"
+        lines = [
+            '{"timestamp":"2024-09-06T21:00:00Z","event":"ValidEntry"}',
+            '{"event":"NoTimestamp"}',
+            '{"timestamp":"not-a-timestamp","event":"BadTimestamp"}',
+            '{"timestamp":"2024-09-06T21:01:00Z"}',
+            'not json at all',
+            '[1, 2, 3]',
+        ]
+        journal.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        strict, _ = parser.read_journal_file(journal)
+        assert [entry["event"] for entry in strict] == ["ValidEntry"]
+
+        lenient, _ = parser.read_journal_file(journal, include_invalid=True)
+        # Every JSON object survives; undecodable lines and non-objects do not
+        assert len(lenient) == 4
+        assert lenient[1] == {"event": "NoTimestamp"}
+        assert lenient[2]["event"] == "BadTimestamp"
+        assert lenient[3] == {"timestamp": "2024-09-06T21:01:00Z"}
+
+
 class TestJournalParserPerformance:
     """Performance and stress tests for journal parser."""
     
